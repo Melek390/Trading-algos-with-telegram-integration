@@ -38,6 +38,9 @@ logs/
 .vscode/settings.json
 .idea/
 
+# ── Claude Code ───────────────────────────────────────────────────────────────
+.claude/
+
 # ── Misc ──────────────────────────────────────────────────────────────────────
 feature_allocation.html
 .DS_Store
