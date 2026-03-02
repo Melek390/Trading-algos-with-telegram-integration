@@ -1,0 +1,44 @@
+# ── Milestone scope ───────────────────────────────────────────────────────────
+# algos/ and telegram/ are excluded from this milestone (data infrastructure).
+# They will be added in future commits.
+algos/
+telegram/
+
+# ── Environment & secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+*.pem
+*.key
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ── Database files ────────────────────────────────────────────────────────────
+data/database/*.db
+data/database/*.db-shm
+data/database/*.db-wal
+
+# ── Universe caches ───────────────────────────────────────────────────────────
+universe/cache/
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+feature_allocation.html
+.DS_Store
+Thumbs.db
