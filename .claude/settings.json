@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -c \":*)",
-      "Bash(python -c \"import py_compile; py_compile.compile\\(''telegram/bot.py'', doraise=True\\); print\\(''OK''\\)\")"
-    ]
-  }
-}

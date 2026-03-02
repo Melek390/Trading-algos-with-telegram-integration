@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -c \":*)",
-      "Bash(.venv/Scripts/python algos/algo001.py)",
-      "Bash(pip freeze)"
-    ]
-  }
-}
