@@ -267,8 +267,8 @@ All times are **UTC**. Add your local offset to convert:
 
 ```bash
 # 1. Clone the repository
-git clone <repo-url>
-cd stocks-investing-algos
+git clone "https://github.com/Melek390/Trading-algos-with-telegram-integration"
+cd Trading-algos-with-telegram-integration
 
 # 2. Create and activate virtual environment
 python -m venv .venv
