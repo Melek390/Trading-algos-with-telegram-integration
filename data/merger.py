@@ -8,13 +8,10 @@ Run order
 0. Shared context  — macro, sector ETFs, IWM/SPY fetched ONCE upfront
 1. ALGO_001        — 3 ETFs, single batch → write to DB
 2. ALGO_002        — universe002 (S&P 900 earnings window) in batches → write each batch
-3. ALGO_003        — universe003 (SP500); reuse ALGO_002 cached rows for overlap,
-                     batch-fetch the rest → write each batch
 
 Output: data/database/stocks.db
     algo_001  (snapshot_date, symbol) PK  ← Dual Momentum  (SPY/VXUS/SHY)
     algo_002  (snapshot_date, symbol) PK  ← Revenue Beat   (earnings window)
-    algo_003  (snapshot_date, symbol) PK  ← Random Forest  (SP500)
     macro     snapshot_date PK            ← macro time-series
 
 Usage:
@@ -23,7 +20,6 @@ Usage:
     python data/merger.py --symbols AAPL MSFT
     python data/merger.py --algo-001       # Dual Momentum only
     python data/merger.py --algo-002       # Revenue Beat only
-    python data/merger.py --algo-003       # Random Forest only
     python data/merger.py --batch-size 50  # smaller batches (default 100)
 """
 
@@ -46,7 +42,6 @@ sys.path.insert(0, str(_PROJECT_DIR))     # project root — for universe/
 
 from universe.universe001 import get_universe as _universe001
 from universe.universe002 import get_universe as _universe002
-from universe.universe003 import get_universe as _universe003
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +50,6 @@ _HERE = Path(__file__).resolve().parent
 DATABASE_DIR = (_HERE if _HERE.name == "data" else _HERE / "data") / "database"
 DATABASE_DIR.mkdir(parents=True, exist_ok=True)
 STOCKS_DB  = DATABASE_DIR / "stocks.db"
-HISTORY_DB = DATABASE_DIR / "history.db"   # append-only training ledger
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -84,32 +78,17 @@ ALGO_001_FEATURES = [
 ]
 
 ALGO_002_FEATURES = [
-    # Tier S
+    # Tier S (catalyst gates)
     "eps_beat_pct", "revenue_beat_pct", "volume_ratio",
     "iwm_20d_return", "vix_level",
-    # Tier A
+    # Tier A (momentum + technicals)
     "consecutive_beats", "pre_earnings_10d_return", "relative_to_iwm_20d",
     "sector_etf_20d_return", "rsi_14",
-    # Tier B
+    "price_change_20d", "distance_from_50d_ma", "iwm_spy_spread_20d",
+    # Tier B (fundamentals)
     "market_cap", "gross_margin_change", "avg_eps_beat_pct_4q", "revenue_yoy_growth",
-    # Tier C
-    "avg_dollar_volume_30d", "short_percent_float", "max_drawdown_90d",
-]
-
-ALGO_003_FEATURES = [
-    # Tier S
-    "eps_beat_pct", "revenue_beat_pct", "volume_ratio",
-    "iwm_20d_return", "vix_level",
-    # Tier A
-    "consecutive_beats", "pre_earnings_10d_return", "relative_to_iwm_20d",
-    "distance_from_50d_ma", "sector_etf_20d_return", "rsi_14",
-    "price_change_20d", "iwm_spy_spread_20d",
-    # Tier B
-    "market_cap", "forward_pe", "ev_ebitda", "gross_margin_change",
-    "avg_eps_beat_pct_4q", "revenue_yoy_growth",
-    # Tier C
-    "atr_pct", "yield_10y_change_bps", "avg_dollar_volume_30d",
-    "short_percent_float", "max_drawdown_90d",
+    # Tier C (risk)
+    "atr_pct", "avg_dollar_volume_30d", "short_percent_float", "max_drawdown_90d",
 ]
 
 # Columns stored as TEXT instead of REAL in SQLite
@@ -253,6 +232,7 @@ def _collect_batch(symbols: list[str], ctx: _Ctx) -> pd.DataFrame:
     return master
 
 
+
 def _resolve_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     """Merge _x/_y suffix columns — left source wins, _y fills NaN gaps."""
     for col in list(df.columns):
@@ -390,87 +370,6 @@ def _write_macro(conn: sqlite3.Connection, macro: dict, snapshot_date: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HISTORY DB HELPERS  (history.db — append-only training ledger)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _ensure_history_table(conn: sqlite3.Connection):
-    """Create algo_003_history if not exists; add missing columns."""
-    col_defs = ["snapshot_date TEXT NOT NULL", "symbol TEXT NOT NULL"]
-    for col in ALGO_003_FEATURES:
-        sql_type = "TEXT" if col in _SQL_TEXT_COLS else "REAL"
-        col_defs.append(f'"{col}" {sql_type}')
-    col_defs += ["target_21d REAL", "PRIMARY KEY (snapshot_date, symbol)"]
-    conn.execute(f'CREATE TABLE IF NOT EXISTS algo_003_history ({", ".join(col_defs)})')
-
-    existing = {r[1] for r in conn.execute("PRAGMA table_info(algo_003_history)")}
-    for col in ALGO_003_FEATURES + ["target_21d"]:
-        if col not in existing:
-            sql_type = "TEXT" if col in _SQL_TEXT_COLS else "REAL"
-            try:
-                conn.execute(f'ALTER TABLE algo_003_history ADD COLUMN "{col}" {sql_type}')
-            except Exception:
-                pass
-
-
-def _append_history_batch(master: pd.DataFrame, snapshot_date: str):
-    """
-    Append a batch of feature rows to history.db/algo_003_history.
-
-    INSERT OR IGNORE — if (snapshot_date, symbol) already exists (e.g. same-day
-    rerun) the row is left untouched, preserving any target_21d already filled.
-    """
-    conn = sqlite3.connect(str(HISTORY_DB))
-    try:
-        _ensure_history_table(conn)
-
-        for col in ALGO_003_FEATURES:
-            if col not in master.columns:
-                master[col] = float("nan")
-
-        feat_str = ", ".join(f'"{c}"' for c in ALGO_003_FEATURES)
-        col_str  = f"snapshot_date, symbol, {feat_str}, target_21d"
-        ph_str   = ", ".join("?" for _ in range(3 + len(ALGO_003_FEATURES)))
-
-        count = 0
-        for symbol in master.index:
-            row  = master.loc[symbol]
-            vals = ([snapshot_date, symbol]
-                    + [_to_py(row.get(c)) for c in ALGO_003_FEATURES]
-                    + [None])   # target_21d — filled later by target-fill job
-            conn.execute(
-                f"INSERT OR IGNORE INTO algo_003_history ({col_str}) VALUES ({ph_str})",
-                vals,
-            )
-            count += 1
-
-        conn.commit()
-        logger.info(f"  ✅ history: {count} rows appended ({snapshot_date})")
-    finally:
-        conn.close()
-
-
-def _migrate_algo_003_if_needed(conn: sqlite3.Connection):
-    """
-    If algo_003 was created with the old (snapshot_date, symbol) composite PK,
-    drop it so _ensure_table can recreate it with symbol-only PK.
-    """
-    exists = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='algo_003'"
-    ).fetchone()
-    if not exists:
-        return
-
-    pk_cols = [r for r in conn.execute("PRAGMA table_info(algo_003)") if r[5] > 0]
-    # New schema: exactly one PK column named 'symbol'
-    if len(pk_cols) == 1 and pk_cols[0][1] == "symbol":
-        return
-
-    logger.info("  Migrating algo_003 → symbol-only PK (dropping old table)...")
-    conn.execute("DROP TABLE algo_003")
-    conn.commit()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # ALGO RUNNERS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -492,16 +391,12 @@ def run_algo_001(ctx: _Ctx, conn: sqlite3.Connection):
     logger.info(f"  ✅ algo_001: {n} symbols → {ctx.snapshot_date}")
 
 
-def run_algo_002(ctx: _Ctx, conn: sqlite3.Connection, batch_size: int = 100) -> dict:
-    """
-    Revenue Beat — batch-fetch universe002 (S&P 900 earnings window).
-    Returns {symbol: pd.Series} cache for ALGO_003 to reuse.
-    """
+def run_algo_002(ctx: _Ctx, conn: sqlite3.Connection, batch_size: int = 100) -> None:
+    """Revenue Beat — batch-fetch universe002 (S&P 900 earnings window)."""
     # universe002.get_universe() also populates the revenue_beat in-memory cache
     # that estimates.py reads — call it BEFORE estimates runs
     symbols = _universe002()
     total   = len(symbols)
-    cache   = {}
 
     logger.info(f"\n{'='*70}")
     logger.info(f"  ALGO_002 — Revenue Beat  ({total} symbols, batch_size={batch_size})")
@@ -509,9 +404,13 @@ def run_algo_002(ctx: _Ctx, conn: sqlite3.Connection, batch_size: int = 100) -> 
 
     if total == 0:
         logger.warning("  algo_002: universe002 returned 0 symbols (no earnings this window?)")
-        return cache
+        return
 
     _ensure_table(conn, "algo_002", ALGO_002_FEATURES)
+    # Replace old data — universe is dynamic, previous snapshot is stale
+    conn.execute("DELETE FROM algo_002")
+    conn.commit()
+    logger.info("  algo_002: cleared old snapshot rows")
     total_batches = math.ceil(total / batch_size)
 
     for i in range(0, total, batch_size):
@@ -528,76 +427,7 @@ def run_algo_002(ctx: _Ctx, conn: sqlite3.Connection, batch_size: int = 100) -> 
         n = _upsert_batch(conn, master, "algo_002", ALGO_002_FEATURES, ctx.snapshot_date)
         logger.info(f"  ✅ algo_002 batch {batch_num}/{total_batches}: {n} rows saved")
 
-        # Cache full row for ALGO_003 reuse (avoids re-fetching overlap symbols)
-        for sym in master.index:
-            cache[sym] = master.loc[sym]
-
     logger.info(f"\n  ✅ ALGO_002 complete: {total} symbols in {total_batches} batches")
-    return cache
-
-
-def run_algo_003(
-    ctx:        _Ctx,
-    conn:       sqlite3.Connection,
-    batch_size: int = 100,
-    cache:      dict = None,
-):
-    """
-    Random Forest — batch-fetch universe003 (SP500).
-    Symbols already cached from ALGO_002 are written directly without re-fetching.
-    """
-    if cache is None:
-        cache = {}
-
-    symbols = _universe003()
-    total   = len(symbols)
-
-    logger.info(f"\n{'='*70}")
-    logger.info(f"  ALGO_003 — Random Forest  ({total} symbols, batch_size={batch_size})")
-    logger.info(f"{'='*70}")
-
-    _migrate_algo_003_if_needed(conn)
-    _ensure_table(conn, "algo_003", ALGO_003_FEATURES, symbol_only_pk=True)
-
-    cached_syms = [s for s in symbols if s in cache]
-    to_fetch    = [s for s in symbols if s not in cache]
-
-    # ── Write cached symbols (reused from ALGO_002 — no extra API calls) ─────
-    if cached_syms:
-        logger.info(f"  Reusing {len(cached_syms)} symbols from ALGO_002 cache...")
-        cached_master = pd.DataFrame(
-            [cache[s] for s in cached_syms],
-            index=pd.Index(cached_syms, name="symbol"),
-        )
-        n = _upsert_batch(conn, cached_master, "algo_003", ALGO_003_FEATURES,
-                          ctx.snapshot_date, symbol_only_pk=True)
-        logger.info(f"  ✅ algo_003 (cached): {n} rows saved")
-        _append_history_batch(cached_master, ctx.snapshot_date)
-
-    # ── Batch-fetch remaining symbols ─────────────────────────────────────────
-    if to_fetch:
-        total_fresh   = len(to_fetch)
-        total_batches = math.ceil(total_fresh / batch_size)
-        logger.info(f"  Fetching {total_fresh} remaining symbols in {total_batches} batches...")
-
-        for i in range(0, total_fresh, batch_size):
-            batch     = to_fetch[i : i + batch_size]
-            batch_num = i // batch_size + 1
-            logger.info(f"\n  [Batch {batch_num}/{total_batches}]  {len(batch)} symbols"
-                        f"  ({i+1}–{min(i+batch_size, total_fresh)} of {total_fresh})")
-
-            master = _collect_batch(batch, ctx)
-            if master.empty:
-                logger.warning(f"  Batch {batch_num}: no data — skipping")
-                continue
-
-            n = _upsert_batch(conn, master, "algo_003", ALGO_003_FEATURES,
-                              ctx.snapshot_date, symbol_only_pk=True)
-            logger.info(f"  ✅ algo_003 batch {batch_num}/{total_batches}: {n} rows saved")
-            _append_history_batch(master, ctx.snapshot_date)
-
-    logger.info(f"\n  ✅ ALGO_003 complete: {total} symbols"
-                f"  ({len(cached_syms)} reused, {len(to_fetch)} fetched)")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -615,7 +445,6 @@ def run_symbols(
     """
     run_001 = algos is None or "ALGO_001" in algos
     run_002 = algos is None or "ALGO_002" in algos
-    run_003 = algos is None or "ALGO_003" in algos
 
     ctx  = _build_context()
     conn = sqlite3.connect(str(STOCKS_DB))
@@ -637,16 +466,9 @@ def run_symbols(
 
             if run_002:
                 _ensure_table(conn, "algo_002", ALGO_002_FEATURES)
-                n = _upsert_batch(conn, master, "algo_002", ALGO_002_FEATURES, ctx.snapshot_date)
-                logger.info(f"  ✅ algo_002: {n} rows")
-
-            if run_003:
-                _migrate_algo_003_if_needed(conn)
-                _ensure_table(conn, "algo_003", ALGO_003_FEATURES, symbol_only_pk=True)
-                n = _upsert_batch(conn, master, "algo_003", ALGO_003_FEATURES,
-                                  ctx.snapshot_date, symbol_only_pk=True)
-                logger.info(f"  ✅ algo_003: {n} rows")
-                _append_history_batch(master, ctx.snapshot_date)
+                if not master.empty:
+                    n = _upsert_batch(conn, master, "algo_002", ALGO_002_FEATURES, ctx.snapshot_date)
+                    logger.info(f"  ✅ algo_002: {n} rows")
 
         if ctx.macro:
             _write_macro(conn, ctx.macro, ctx.snapshot_date)
@@ -668,13 +490,11 @@ def run_pipeline(
 
     ALGO_001 → single batch (3 ETFs)
     ALGO_002 → batched from universe002 (S&P 900 earnings window)
-    ALGO_003 → batched from universe003 (SP500); reuses ALGO_002 cache for overlap
     """
     start_time = datetime.now()
 
     run_001 = algos is None or "ALGO_001" in algos
     run_002 = algos is None or "ALGO_002" in algos
-    run_003 = algos is None or "ALGO_003" in algos
 
     logger.info("\n" + "=" * 70)
     logger.info("  DATA PIPELINE — BATCHED MERGER ORCHESTRATOR")
@@ -688,7 +508,6 @@ def run_pipeline(
     ctx = _build_context()
 
     conn = sqlite3.connect(str(STOCKS_DB))
-    symbol_cache = {}
 
     try:
         # ── Step 1: ALGO_001 ─────────────────────────────────────────────────
@@ -700,13 +519,7 @@ def run_pipeline(
         # populates the Finnhub revenue beat in-memory cache BEFORE estimates.py
         # runs for those symbols — zero extra Finnhub calls for the cached tickers.
         if run_002:
-            symbol_cache = run_algo_002(ctx, conn, batch_size=batch_size)
-
-        # ── Step 3: ALGO_003 ─────────────────────────────────────────────────
-        # Symbols that appeared in ALGO_002 are written directly from cache;
-        # remaining SP500 symbols are fetched in fresh batches.
-        if run_003:
-            run_algo_003(ctx, conn, batch_size=batch_size, cache=symbol_cache)
+            run_algo_002(ctx, conn, batch_size=batch_size)
 
         # ── Macro table ───────────────────────────────────────────────────────
         if ctx.macro:
@@ -745,17 +558,15 @@ if __name__ == "__main__":
     parser.add_argument("--test",       action="store_true", help="Test mode: AAPL, MSFT, NVDA")
     parser.add_argument("--algo-001",   action="store_true", help="Run ALGO_001 only (Dual Momentum)")
     parser.add_argument("--algo-002",   action="store_true", help="Run ALGO_002 only (Revenue Beat)")
-    parser.add_argument("--algo-003",   action="store_true", help="Run ALGO_003 only (Random Forest)")
     parser.add_argument("--batch-size", type=int, default=100, help="Symbols per batch (default 100)")
 
     args = parser.parse_args()
 
     algos = None
-    if args.algo_001 or args.algo_002 or args.algo_003:
+    if args.algo_001 or args.algo_002:
         algos = []
         if args.algo_001: algos.append("ALGO_001")
         if args.algo_002: algos.append("ALGO_002")
-        if args.algo_003: algos.append("ALGO_003")
 
     if args.test:
         run_symbols(["AAPL", "MSFT", "NVDA"], algos=algos, batch_size=args.batch_size)

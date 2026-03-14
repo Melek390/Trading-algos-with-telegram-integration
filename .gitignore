@@ -1,9 +1,3 @@
-# ── Milestone scope ───────────────────────────────────────────────────────────
-# algos/ and telegram/ are excluded from this milestone (data infrastructure).
-# They will be added in future commits.
-algos/
-telegram/
-
 # ── Environment & secrets ─────────────────────────────────────────────────────
 .env
 .env.*

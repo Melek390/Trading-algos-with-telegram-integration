@@ -21,7 +21,9 @@ a per-symbol fallback call is made with a 1.1s delay to stay under 60 req/min.
 
 import logging
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 import requests
@@ -37,8 +39,10 @@ _FINNHUB_KEY = os.getenv("FINNHUB_API_KEY", "")
 _FINNHUB_URL = "https://finnhub.io/api/v1/calendar/earnings"
 
 # Rate-limit tracker for per-symbol Finnhub calls (free tier: 60 req/min)
+# Lock ensures thread-safety when bulk_estimates runs in parallel.
 _last_finnhub_t: float = 0.0
 _FINNHUB_INTERVAL      = 1.1   # seconds between calls → ~55 req/min
+_finnhub_lock          = threading.Lock()
 
 # universe002 cache — populated as side-effect of get_universe() in merger
 try:
@@ -69,40 +73,41 @@ def _get_revenue_beat(symbol: str) -> float | None:
     if _HAS_CACHE and _in_cal(symbol):
         return _cached_beat(symbol)   # float or None (upcoming, no actual yet)
 
-    # ── 2. Per-symbol Finnhub fallback (rate-limited) ─────────────────────────
+    # ── 2. Per-symbol Finnhub fallback (rate-limited, thread-safe) ───────────
     if not _FINNHUB_KEY:
         return None
 
-    elapsed = time.time() - _last_finnhub_t
-    if elapsed < _FINNHUB_INTERVAL:
-        time.sleep(_FINNHUB_INTERVAL - elapsed)
+    with _finnhub_lock:
+        elapsed = time.time() - _last_finnhub_t
+        if elapsed < _FINNHUB_INTERVAL:
+            time.sleep(_FINNHUB_INTERVAL - elapsed)
 
-    today          = datetime.now().strftime("%Y-%m-%d")
-    six_months_ago = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
+        today          = datetime.now().strftime("%Y-%m-%d")
+        six_months_ago = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
 
-    try:
-        r = requests.get(
-            _FINNHUB_URL,
-            params={"symbol": symbol, "from": six_months_ago, "to": today, "token": _FINNHUB_KEY},
-            timeout=10,
-        )
-        _last_finnhub_t = time.time()
+        try:
+            r = requests.get(
+                _FINNHUB_URL,
+                params={"symbol": symbol, "from": six_months_ago, "to": today, "token": _FINNHUB_KEY},
+                timeout=10,
+            )
+            _last_finnhub_t = time.time()
 
-        if r.status_code == 429:
-            logger.warning(f"Finnhub rate limit hit for {symbol}")
-            return None
-        if r.status_code != 200:
-            return None
+            if r.status_code == 429:
+                logger.warning(f"Finnhub rate limit hit for {symbol}")
+                return None
+            if r.status_code != 200:
+                return None
 
-        for entry in sorted(r.json().get("earningsCalendar", []),
-                            key=lambda x: x.get("date", ""), reverse=True):
-            rev_actual = entry.get("revenueActual")
-            rev_est    = entry.get("revenueEstimate")
-            if rev_actual and rev_est and rev_est != 0:
-                return round((rev_actual - rev_est) / abs(rev_est) * 100, 4)
+            for entry in sorted(r.json().get("earningsCalendar", []),
+                                key=lambda x: x.get("date", ""), reverse=True):
+                rev_actual = entry.get("revenueActual")
+                rev_est    = entry.get("revenueEstimate")
+                if rev_actual and rev_est and rev_est != 0:
+                    return round((rev_actual - rev_est) / abs(rev_est) * 100, 4)
 
-    except Exception as e:
-        logger.debug(f"Finnhub revenue beat failed for {symbol}: {e}")
+        except Exception as e:
+            logger.debug(f"Finnhub revenue beat failed for {symbol}: {e}")
 
     return None
 
@@ -162,24 +167,18 @@ def get_estimates_snapshot(symbol: str) -> dict:
     return result
 
 
-def get_bulk_estimates(
-    symbols:       list[str],
-    delay_seconds: float = 0.5,
-) -> pd.DataFrame:
+def get_bulk_estimates(symbols: list[str]) -> pd.DataFrame:
     """
-    Fetch estimate snapshots for entire universe.
+    Fetch estimate snapshots for entire universe in parallel (5 workers).
+    - Universe002 symbols: cache hit → truly parallel, no Finnhub calls.
+    - Other symbols: Finnhub calls serialized via _finnhub_lock → rate-safe.
     Returns DataFrame indexed by symbol.
     """
-    records = []
-    total   = len(symbols)
+    total = len(symbols)
+    logger.info(f"Estimates: fetching {total} symbols (parallel, 5 workers)...")
 
-    for i, symbol in enumerate(symbols):
-        if i % 50 == 0:
-            logger.info(f"Estimates: {i}/{total}")
-
-        record = get_estimates_snapshot(symbol)
-        records.append(record)
-        time.sleep(delay_seconds)
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        records = list(ex.map(get_estimates_snapshot, symbols))
 
     eps_filled = sum(1 for r in records if r.get("eps_beat_pct") is not None)
     rev_filled = sum(1 for r in records if r.get("revenue_beat_pct") is not None)

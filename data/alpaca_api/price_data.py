@@ -13,6 +13,7 @@ Technical features computed (Tier A + C):
 import os
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Union
 
@@ -244,16 +245,15 @@ def build_price_features(
 def build_bulk_price_features(
     symbols:     list,
     as_of_date:  datetime = None,
-    delay:       float = 0.3,
     iwm_ret_20d: float = None,
     spy_ret_20d: float = None,
 ) -> pd.DataFrame:
     """
-    Build price features for all tickers.
-    RETURNS DataFrame instead of saving.
+    Build price features for all tickers in parallel (5 workers).
+    Returns DataFrame indexed by symbol.
 
-    Pass iwm_ret_20d / spy_ret_20d to reuse pre-fetched values across
-    multiple batch calls (avoids redundant Alpaca requests per batch).
+    Pass iwm_ret_20d / spy_ret_20d to reuse pre-fetched market returns
+    across batches (avoids redundant Alpaca calls per batch).
     """
     if as_of_date is None:
         as_of_date = datetime.now()
@@ -269,20 +269,19 @@ def build_bulk_price_features(
     iwm_ret, spy_ret = iwm_ret_20d, spy_ret_20d
     logger.info(f"IWM 20d: {iwm_ret:.4f} | SPY 20d: {spy_ret:.4f}")
 
-    records = []
-    total   = len(symbols)
+    total = len(symbols)
+    logger.info(f"Price features: fetching {total} symbols (parallel, 5 workers)...")
 
-    for i, symbol in enumerate(symbols):
-        if i % 25 == 0:
-            logger.info(f"Price features: {i}/{total}")
-        row = build_price_features(
+    def _fetch(symbol):
+        return build_price_features(
             symbol=symbol,
             as_of_date=as_of_date,
             iwm_ret_20d=iwm_ret,
             spy_ret_20d=spy_ret,
         )
-        records.append(row)
-        time.sleep(delay)
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        records = list(ex.map(_fetch, symbols))
 
     df = pd.DataFrame(records).set_index("symbol")
 

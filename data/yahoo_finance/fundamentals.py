@@ -4,12 +4,10 @@ fundamentals.py
 Fetches fundamental data from Yahoo Finance via yfinance.
 
 Covers:
-    Tier B  #14  Market Cap
-    Tier B  #15  Forward P/E
-    Tier B  #16  EV/EBITDA
-    Tier B  #19  Revenue YoY Growth (fallback if SEC EDGAR fails)
-    Tier C  #24  Short Interest %
-    Meta         Sector, Industry, Exchange (used for sector ETF mapping)
+    Tier B  market_cap          — market capitalisation
+    Tier B  revenue_yoy_growth  — YoY revenue growth (fallback if SEC EDGAR fails)
+    Tier C  short_percent_float — short interest % of float (fallback to alternative.py)
+    Meta    sector / industry / exchange — used for sector_etf_20d_return mapping
 """
 
 import logging
@@ -21,7 +19,12 @@ logger = logging.getLogger(__name__)
 
 
 def get_fundamentals(symbol: str) -> dict:
-    """Fetch fundamental snapshot for a single ticker."""
+    """
+    Fetch fundamental snapshot for a single ticker via yfinance.
+
+    Returns dict with market_cap, revenue_yoy_growth, short_percent_float,
+    sector, industry, exchange. Missing fields are None.
+    """
     try:
         ticker = yf.Ticker(symbol)
         info   = ticker.info
@@ -29,21 +32,19 @@ def get_fundamentals(symbol: str) -> dict:
         result = {
             "symbol": symbol,
 
-            # Tier B: Valuation
-            "market_cap":           info.get("marketCap"),
-            "forward_pe":           info.get("forwardPE"),
-            "ev_ebitda":            info.get("enterpriseToEbitda"),
+            # Tier B: size and growth
+            "market_cap":          info.get("marketCap"),
 
-            # Tier B: Growth (fallback — canonical source is SEC EDGAR)
-            "revenue_yoy_growth":   info.get("revenueGrowth"),
+            # Tier B: revenue growth (canonical source is SEC EDGAR; this is the fallback)
+            "revenue_yoy_growth":  info.get("revenueGrowth"),
 
-            # Tier C: Short Interest
-            "short_percent_float":  info.get("shortPercentOfFloat"),
+            # Tier C: short interest (canonical source is alternative.py; this is the fallback)
+            "short_percent_float": info.get("shortPercentOfFloat"),
 
-            # Classification (sector needed for sector_etf_20d_return mapping)
-            "sector":               info.get("sector"),
-            "industry":             info.get("industry"),
-            "exchange":             info.get("exchange"),
+            # Classification — sector is required for sector_etf_20d_return mapping
+            "sector":              info.get("sector"),
+            "industry":            info.get("industry"),
+            "exchange":            info.get("exchange"),
         }
 
         logger.debug(f"✅ Fundamentals fetched: {symbol}")

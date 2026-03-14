@@ -18,6 +18,5 @@ beautifulsoup4==4.14.3
 # ── Telegram bot ──────────────────────────────────────────────────────────────
 python-telegram-bot==22.6
 
-# ── Future: algo execution (not yet installed) ────────────────────────────────
-# scikit-learn
-# lightgbm
+# ── Charts (reports) ──────────────────────────────────────────────────────────
+matplotlib==3.10.8

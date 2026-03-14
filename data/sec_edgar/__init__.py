@@ -1,16 +1,13 @@
 # SEC EDGAR Data Module
-# Fetches actual reported financials straight from official SEC filings
-# 100% free, no API key required — official U.S. government source
+# Fetches actual reported financials from official SEC XBRL filings.
+# 100% free, no API key required — official U.S. government source.
 #
 # Covers:
-#   Tier S  #1  EPS Beat %       → actual EPS from filings vs estimates
-#   Tier S  #2  Revenue Beat %   → actual revenue from filings vs estimates
-#   Tier B  #16 EBITDA Beat %    → operating income from filings
-#   Tier B  #17 Gross Margin     → gross profit / revenue from filings
-#   Tier B  #20 Revenue Growth   → YoY revenue from filings
+#   Tier B  gross_margin_change  → gross profit / revenue delta vs prior quarter
+#   Tier B  revenue_yoy_growth   → YoY revenue growth from 10-Q / 10-K filings
 #
 # Base URL: https://data.sec.gov/api/xbrl/companyfacts/
-# No key needed — just a descriptive User-Agent header (required by SEC)
+# No key needed — just a descriptive User-Agent header (required by SEC).
 
 from .earnings_data import (
     get_company_facts,
@@ -21,9 +18,6 @@ from .earnings_data import (
 
 __all__ = [
     "get_company_facts",
-    "get_revenue_history",
-    "get_eps_history",
-    "get_gross_profit_history",
     "get_earnings_snapshot",
     "get_bulk_earnings",
     "ticker_to_cik",

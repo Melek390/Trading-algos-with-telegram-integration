@@ -1,0 +1,8 @@
+Try Execute Trade again — it should fill now. Market is open on Monday.
+For future reference: if you ever want weekend resilience, 
+the approach would be to switch from notional to whole-share qty orders (which support GTC), 
+but that means calculating the share count yourself from the allocation. 
+Worth doing later when we add proper order management.
+_______________________________________________________
+
+

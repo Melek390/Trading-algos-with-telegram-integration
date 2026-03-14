@@ -24,7 +24,7 @@ Symbols NOT in the calendar are absent from the dict entirely.
 import json
 import logging
 import os
-import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -79,24 +79,32 @@ def _save_mc_cache(caps: dict):
         json.dump({"updated_at": datetime.now().isoformat(), "caps": caps}, f)
 
 
+def _fetch_one_cap(sym: str) -> tuple[str, float | None]:
+    """Fetch market cap for a single symbol (runs in thread pool)."""
+    try:
+        mc = yf.Ticker(sym).fast_info.market_cap
+        return sym, float(mc) if mc else None
+    except Exception:
+        return sym, None
+
+
 def _filter_by_market_cap(symbols: list[str]) -> list[str]:
     """
     Return symbols whose market cap is in [$50MM, $5BN].
     Uses yfinance fast_info with a 24-hour local cache.
-    First run fetches all; subsequent same-day runs read from cache instantly.
+    Fetches uncached symbols in parallel (10 workers) for speed.
     """
     caps     = _load_mc_cache()
     to_fetch = [s for s in symbols if s not in caps]
 
     if to_fetch:
-        logger.info(f"Universe002: fetching market caps for {len(to_fetch)} symbols...")
-        for sym in to_fetch:
-            try:
-                mc = yf.Ticker(sym).fast_info.market_cap
-                caps[sym] = float(mc) if mc else None
-            except Exception:
-                caps[sym] = None
-            time.sleep(0.05)   # gentle rate-limiting
+        logger.info(
+            f"Universe002: fetching market caps for {len(to_fetch)} symbols "
+            f"(parallel, 10 workers)..."
+        )
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for sym, mc in ex.map(_fetch_one_cap, to_fetch):
+                caps[sym] = mc
         _save_mc_cache(caps)
 
     result = [s for s in symbols if caps.get(s) and _MC_MIN <= caps[s] <= _MC_MAX]
@@ -128,6 +136,11 @@ def get_universe(days_back: int = 7, days_ahead: int = 21) -> list[str]:
     """
     Return tickers with earnings in [today-days_back, today+days_ahead]
     AND market cap in [$50MM, $5BN].
+
+    Default window: -7 to +21 days.
+      -7 days back  → stocks that already reported (eps_beat/revenue_beat populated)
+                      → eligible for entry if beat conditions pass
+      +21 days ahead → upcoming earnings stocks (pre-earnings watchlist/calendar)
 
     Populates _revenue_cache as a side effect.
     """
