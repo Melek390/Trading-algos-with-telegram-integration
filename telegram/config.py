@@ -12,6 +12,7 @@ from pathlib import Path
 _HERE        = Path(__file__).resolve().parent        # telegram/
 PROJECT_DIR  = _HERE.parent                           # project root
 STOCKS_DB    = PROJECT_DIR / "data" / "database" / "stocks.db"
+STOCKS_DB.parent.mkdir(parents=True, exist_ok=True)   # create data/database/ if missing (gitignored)
 MERGER_PY    = PROJECT_DIR / "data" / "merger.py"
 VENV_PYTHON  = PROJECT_DIR / ".venv" / "Scripts" / "python.exe"
 
@@ -71,7 +72,7 @@ ALGOS: dict[str, dict] = {
         "signal":      False,        # handled by auto-refresh scheduler
         "tradeable":   True,         # scheduler executes trades automatically
         "schedulable": True,
-        "sched_utc_hour":   20,      # 21:20 UTC = 22:20 TUN = 17:20 EST
-        "sched_utc_minute": 3,
+        "sched_utc_hour":   18,      # 21:20 UTC = 22:20 TUN = 17:20 EST
+        "sched_utc_minute": 53,
     },
 }

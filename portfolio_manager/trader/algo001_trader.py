@@ -148,6 +148,8 @@ def execute() -> TradeResult:
             close_position_001(db_pos["id"], exit_price, "rebalance")
 
     # ── 6. Buy target — DAY order (required for notional/fractional by Alpaca) ──
+    #    Tries notional first (paper / fractional-enabled accounts).
+    #    Falls back to whole-share qty if fractional trading is disabled.
     try:
         order = client.submit_order(
             MarketOrderRequest(
@@ -158,13 +160,35 @@ def execute() -> TradeResult:
             )
         )
     except Exception as e:
-        return TradeResult(
-            action  = "ERROR",
-            target  = target,
-            sold    = current,
-            message = f"Order failed for {target}: {e}",
-            signal_reason = signal.reason,
-        )
+        if "fractional" not in str(e).lower():
+            return TradeResult(
+                action  = "ERROR",
+                target  = target,
+                sold    = current,
+                message = f"Order failed for {target}: {e}",
+                signal_reason = signal.reason,
+            )
+        # Fractional trading disabled — compute whole-share qty from latest price
+        try:
+            import yfinance as yf
+            price = yf.Ticker(target).fast_info.last_price
+            qty   = max(1, int(allocation / price))
+            order = client.submit_order(
+                MarketOrderRequest(
+                    symbol        = target,
+                    qty           = qty,
+                    side          = OrderSide.BUY,
+                    time_in_force = TimeInForce.DAY,
+                )
+            )
+        except Exception as e2:
+            return TradeResult(
+                action  = "ERROR",
+                target  = target,
+                sold    = current,
+                message = f"Order failed for {target}: {e2}",
+                signal_reason = signal.reason,
+            )
 
     # Record new position in DB
     open_position_001(symbol=target, notional=allocation, order_id=str(order.id))

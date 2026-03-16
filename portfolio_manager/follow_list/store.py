@@ -176,12 +176,12 @@ def get_due_today(db_path: Path = _DEFAULT_DB) -> list[dict]:
 
 
 def get_stale(db_path: Path = _DEFAULT_DB) -> list[dict]:
-    """Return entries with earnings_date < today (past / needs refreshing)."""
+    """Return entries with a past earnings_date OR a NULL earnings_date (never fetched)."""
     init_table(db_path)
     today = date.today().isoformat()
     with _conn(db_path) as conn:
         rows = conn.execute(
-            "SELECT * FROM follow_list WHERE earnings_date IS NOT NULL AND earnings_date < ?",
+            "SELECT * FROM follow_list WHERE earnings_date IS NULL OR earnings_date < ?",
             (today,),
         ).fetchall()
     return [dict(r) for r in rows]

@@ -27,6 +27,7 @@ IMPORTANT: run as  python telegram/bot.py  (not  python -m telegram.bot)
 to avoid shadowing the installed  python-telegram-bot  package.
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -59,6 +60,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _refresh_stale_earnings(app) -> None:
+    """Background task: refresh NULL / past earnings dates in the follow list on startup."""
+    try:
+        from services.notification_checker import check_watchlist_earnings
+        await check_watchlist_earnings(app)
+    except Exception:
+        logger.exception("Startup stale-earnings refresh failed")
+
+
 async def _post_init(app) -> None:
     """Called once after the bot connects — restore schedulers + start background tasks."""
     for state in load_scheduler_states():
@@ -68,6 +78,7 @@ async def _post_init(app) -> None:
         logger.info("Restored scheduler for algo_%s → chat %s", algo_id, chat_id)
     start_watchlist_checker(app)
     start_positions_updater(app)
+    asyncio.create_task(_refresh_stale_earnings(app))
 
 
 def main() -> None:
