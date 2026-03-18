@@ -202,6 +202,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             except Exception as e:
                 result_text += f"❌ *Trade execution failed:*\n`{e}`"
 
+        # Mark: user is no longer on the calendar page
+        context.user_data["viewing_calendar"] = False
+
         # Build keyboard — add "Add to Watchlist" buttons for ALGO_002 near-misses
         button_rows = []
         if algo_id == "002" and _trade_result is not None:
@@ -223,15 +226,51 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     for sym, *_ in top3
                 ])
 
-        # Append the standard post-refresh buttons below
+        # Append the standard post-refresh buttons, but replace the "« Back → algo_X"
+        # button with "back_result_X" so that navigating away keeps the result message
+        # visible in chat history instead of overwriting it.
         from keyboards.menus import post_refresh as _post_refresh
         for row in _post_refresh(algo_id, bd).inline_keyboard:
-            button_rows.append(row)
+            button_rows.append([
+                InlineKeyboardButton(btn.text, callback_data=f"back_result_{algo_id}")
+                if btn.callback_data == f"algo_{algo_id}"
+                else btn
+                for btn in row
+            ])
 
         await query.edit_message_text(
             result_text + footer,
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(button_rows),
+        )
+
+    # ── Back from refresh result — keep result message, open algo menu fresh ────
+    elif data.startswith("back_result_"):
+        algo_id = data[len("back_result_"):]
+        info    = ALGOS.get(algo_id)
+        if not info:
+            return
+
+        # Strip the keyboard from the result message so it stays as a clean log entry
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except BadRequest:
+            pass
+
+        # Send the algo menu as a new message below the result
+        has_data  = table_has_data(info["table"])
+        safe_name = info["name"].replace("_", "\\_")
+        safe_desc = info["description"].replace("_", "\\_")
+        if has_data:
+            snap_date = latest_snapshot(info["table"])
+            status = f"\n\n_Last refresh: {snap_date}_" if snap_date else "\n\n_Data available_"
+        else:
+            status = "\n\n_No data yet — tap Refresh Data to fetch_"
+
+        await query.message.reply_text(
+            f"*{safe_name}*\n\n{safe_desc}{status}{footer}",
+            parse_mode="Markdown",
+            reply_markup=algo_action(algo_id, bd),
         )
 
     # ── Scheduler toggle (any schedulable algo) ────────────────────────────────

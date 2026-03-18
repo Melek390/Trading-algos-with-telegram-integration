@@ -191,8 +191,9 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
     text, kb = _calendar_page(entries, page)
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
 
-    # Cache entries in context for pagination (avoids re-fetching Finnhub)
-    context.user_data["cal_entries"] = entries
+    # Cache entries for pagination and mark that we're on the calendar view
+    context.user_data["cal_entries"]       = entries
+    context.user_data["viewing_calendar"]  = True
 
 
 async def handle_calendar_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int):
@@ -203,6 +204,7 @@ async def handle_calendar_page(update: Update, context: ContextTypes.DEFAULT_TYP
         # Cache miss — re-fetch
         await handle_calendar(update, context, page)
         return
+    context.user_data["viewing_calendar"] = True
     text, kb = _calendar_page(entries, page)
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
 
@@ -242,11 +244,11 @@ async def handle_cal_follow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     msg = f"⭐ {symbol} added to Follow List." if inserted else f"✅ {symbol} updated in Follow List."
     await query.answer(msg, show_alert=True)
 
-    # Only refresh the calendar view if the user is actually on the calendar page.
-    # When this button is triggered from the ALGO_002 result notification (no cached
-    # entries), editing the message would show the "run ALGO_002 first" empty state.
+    # Only refresh the calendar view if the user is actually looking at it right now.
+    # Without this check, stale cal_entries from an earlier calendar visit would cause
+    # the calendar to overwrite the ALGO_002 result message when "+ SYM" is tapped.
     entries = context.user_data.get("cal_entries")
-    if entries:
+    if entries and context.user_data.get("viewing_calendar"):
         page     = context.user_data.get("cal_page", 0)
         text, kb = _calendar_page(entries, page)
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
