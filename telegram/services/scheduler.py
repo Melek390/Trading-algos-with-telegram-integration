@@ -342,8 +342,9 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
                         }
                         for sym, _, n_cond, row in top3
                     }
+                    # Use algo002_add_ so tapping never navigates away to the calendar
                     button_rows.append([
-                        InlineKeyboardButton(f"+ {sym}", callback_data=f"cal_follow_{sym}")
+                        InlineKeyboardButton(f"+ {sym}", callback_data=f"algo002_add_{sym}")
                         for sym, *_ in top3
                     ])
 

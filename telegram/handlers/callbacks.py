@@ -26,6 +26,7 @@ from handlers.calendar import (
     handle_calendar,
     handle_calendar_page,
     handle_cal_follow,
+    handle_algo002_add,
     handle_followlist,
     handle_fl_remove,
     handle_stock_detail,
@@ -74,12 +75,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     data  = query.data
     bd    = context.bot_data
 
-    # ── cal_follow_ must be routed BEFORE query.answer() so handle_cal_follow
-    #    can show a popup via query.answer(msg, show_alert=True).
-    #    The blanket query.answer() below would consume the callback first.
+    # ── These must be routed BEFORE query.answer() so the handler can call
+    #    query.answer(msg, show_alert=True) to show a popup alert.
     if data.startswith("cal_follow_"):
         sym = data[len("cal_follow_"):]
         await handle_cal_follow(update, context, symbol=sym)
+        return
+
+    if data.startswith("algo002_add_"):
+        sym = data[len("algo002_add_"):]
+        await handle_algo002_add(update, context, symbol=sym)
         return
 
     # All other routes: acknowledge the tap immediately (clears Telegram spinner)
@@ -211,7 +216,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             near_misses = getattr(_trade_result, "near_misses", None) or []
             top3 = near_misses[:3]
             if top3:
-                # Cache near-miss metadata in bot_data so handle_cal_follow can read it
+                # Cache near-miss metadata in bot_data so handle_algo002_add can read it
                 # near_misses structure: (sym, score_pct, n_cond, row_dict)
                 context.bot_data["algo002_near_misses"] = {
                     sym: {
@@ -221,8 +226,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     }
                     for sym, _score, n_cond, row in top3
                 }
+                # Use algo002_add_ (not cal_follow_) so tapping never navigates to calendar
                 button_rows.append([
-                    InlineKeyboardButton(f"+ {sym}", callback_data=f"cal_follow_{sym}")
+                    InlineKeyboardButton(f"+ {sym}", callback_data=f"algo002_add_{sym}")
                     for sym, *_ in top3
                 ])
 
@@ -475,19 +481,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode="Markdown",
         )
 
+        trade_result = None
         try:
             trade_result = await execute_trade(algo_id)
             result_text  = format_trade_result(trade_result, algo_id)
         except Exception as e:
             result_text = f"❌ *Trade execution failed:*\n`{e}`"
 
+        # Build keyboard — near-miss watchlist buttons for ALGO_002
+        button_rows = []
+        if algo_id == "002" and trade_result is not None:
+            near_misses = getattr(trade_result, "near_misses", None) or []
+            top3 = near_misses[:3]
+            if top3:
+                context.bot_data["algo002_near_misses"] = {
+                    sym: {
+                        "conditions_met":   n_cond,
+                        "eps_beat_pct":     row.get("eps_beat_pct"),
+                        "revenue_beat_pct": row.get("revenue_beat_pct"),
+                    }
+                    for sym, _score, n_cond, row in top3
+                }
+                button_rows.append([
+                    InlineKeyboardButton(f"+ {sym}", callback_data=f"algo002_add_{sym}")
+                    for sym, *_ in top3
+                ])
+
+        button_rows.append([InlineKeyboardButton("🔁  Run Again", callback_data=f"trade_{algo_id}")])
+        button_rows.append([InlineKeyboardButton("« Back",        callback_data=f"algo_{algo_id}")])
+
         await query.edit_message_text(
             result_text + footer,
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔁  Run Again",  callback_data=f"trade_{algo_id}")],
-                [InlineKeyboardButton("« Back",         callback_data=f"algo_{algo_id}")],
-            ]),
+            reply_markup=InlineKeyboardMarkup(button_rows),
         )
 
     # ── Earnings Calendar ──────────────────────────────────────────────────────

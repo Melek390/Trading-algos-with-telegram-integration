@@ -72,7 +72,7 @@ ALGOS: dict[str, dict] = {
         "signal":      False,        # handled by auto-refresh scheduler
         "tradeable":   True,         # scheduler executes trades automatically
         "schedulable": True,
-        "sched_utc_hour":   18,      # 21:20 UTC = 22:20 TUN = 17:20 EST
-        "sched_utc_minute": 53,
+        "sched_utc_hour":   22,      # 21:20 UTC = 22:20 TUN = 17:20 EST
+        "sched_utc_minute": 20,
     },
 }

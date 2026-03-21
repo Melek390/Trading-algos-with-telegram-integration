@@ -209,22 +209,18 @@ async def handle_calendar_page(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
 
 
-async def handle_cal_follow(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
-    """Add (or update) a symbol in the follow list, saving ALGO_002 metrics if available."""
-    query   = update.callback_query
-    chat_id = query.message.chat_id
-
-    # Fetch earnings date from yfinance
+def _follow_stock(symbol: str, context, chat_id: int) -> str:
+    """
+    Shared logic: add symbol to follow list, pulling ALGO_002 metrics from bot_data cache.
+    Returns the confirmation message string.
+    """
     earnings_date = None
     try:
         from services.notification_checker import get_earnings_date_yf
         earnings_date = get_earnings_date_yf(symbol)
     except Exception:
-        entries_ctx   = context.user_data.get("cal_entries", [])
-        entry_ctx     = next((e for e in entries_ctx if e["symbol"] == symbol), {})
-        earnings_date = entry_ctx.get("earnings_date")
+        pass
 
-    # Pull ALGO_002 metrics from bot_data cache (set when pipeline result is built)
     eps_beat_pct = revenue_beat_pct = conditions_met = None
     nm = context.bot_data.get("algo002_near_misses", {})
     if symbol.upper() in nm:
@@ -241,17 +237,35 @@ async def handle_cal_follow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         revenue_beat_pct=revenue_beat_pct,
         conditions_met=conditions_met,
     )
-    msg = f"⭐ {symbol} added to Follow List." if inserted else f"✅ {symbol} updated in Follow List."
+    return f"⭐ {symbol} added to Follow List." if inserted else f"✅ {symbol} already in Follow List."
+
+
+async def handle_cal_follow(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
+    """
+    Add symbol to follow list from the EARNINGS CALENDAR view.
+    After adding, refreshes the calendar message to update the ✅ marker.
+    """
+    query   = update.callback_query
+    msg     = _follow_stock(symbol, context, query.message.chat_id)
     await query.answer(msg, show_alert=True)
 
-    # Only refresh the calendar view if the user is actually looking at it right now.
-    # Without this check, stale cal_entries from an earlier calendar visit would cause
-    # the calendar to overwrite the ALGO_002 result message when "+ SYM" is tapped.
+    # Refresh the calendar in-place so the button flips to ✅ SYM
     entries = context.user_data.get("cal_entries")
-    if entries and context.user_data.get("viewing_calendar"):
+    if entries:
         page     = context.user_data.get("cal_page", 0)
         text, kb = _calendar_page(entries, page)
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+
+
+async def handle_algo002_add(update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str):
+    """
+    Add symbol to follow list from an ALGO_002 result message or Update Trade message.
+    Never edits the underlying message — keeps the result visible.
+    """
+    query = update.callback_query
+    msg   = _follow_stock(symbol, context, query.message.chat_id)
+    await query.answer(msg, show_alert=True)
+    # Intentionally no edit_message_text — result message stays intact
 
 
 async def handle_followlist(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
