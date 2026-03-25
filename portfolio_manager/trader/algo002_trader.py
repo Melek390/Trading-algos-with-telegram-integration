@@ -123,7 +123,8 @@ def execute(db_path: Path = _DEFAULT_DB) -> MultiTradeResult:
         if candidates:
             try:
                 total_capital = get_algo_capital("002")
-                per_position  = round(total_capital / len(candidates), 2)
+                max_per_position = round(total_capital * 0.30, 2)   # hard cap: 30% of capital per position
+                per_position     = round(min(total_capital / len(candidates), max_per_position), 2)
             except Exception as e:
                 result.error = f"Capital manager error: {e}"
                 return result
@@ -148,7 +149,7 @@ def execute(db_path: Path = _DEFAULT_DB) -> MultiTradeResult:
                             symbol        = sym,
                             qty           = qty,
                             side          = OrderSide.BUY,
-                            time_in_force = TimeInForce.DAY,
+                            time_in_force = TimeInForce.GTC,  # stays pending until next open if submitted after hours
                             order_class   = OrderClass.BRACKET,
                             take_profit   = TakeProfitRequest(limit_price=tp_price),
                             stop_loss     = StopLossRequest(stop_price=sl_price),
