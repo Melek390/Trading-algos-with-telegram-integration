@@ -22,6 +22,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from config import (
     ALGOS, MERGER_PY, PROJECT_DIR, STOCKS_DB, VENV_PYTHON,
     WATCHLIST_UTC_HOUR, WATCHLIST_UTC_MINUTE,
+    WATCHLIST_PERF_UTC_HOUR, WATCHLIST_PERF_UTC_MINUTE, WATCHLIST_GAIN_THRESHOLD_PCT,
     POSITIONS_UTC_HOUR, POSITIONS_UTC_MINUTE,
 )
 from services.signals import get_signal
@@ -368,6 +369,44 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
 
 # ── Watchlist earnings check (daily after market close) ──────────────────────────
 
+def _build_earnings_summary(stats: dict) -> str:
+    """
+    Build the watchlist earnings summary message from the stats dict returned
+    by check_watchlist_earnings(). Returns an empty string if nothing to report
+    (suppresses the message entirely on quiet days).
+    """
+    reported       = stats.get("reported", [])
+    due_unreported = stats.get("due_unreported", [])
+
+    # Nothing happened today — stay silent
+    if not reported and not due_unreported:
+        return ""
+
+    lines = ["📅 *Watchlist Earnings Check*\n"]
+
+    # Per-stock results for stocks that have actuals
+    for r in reported:
+        sym     = r["symbol"]
+        eps     = r["eps_beat_pct"]
+        rev     = r["revenue_beat_pct"]
+        eps_s   = f"`{eps:+.1f}%`" if eps is not None else "`N/A`"
+        rev_s   = f"`{rev:+.1f}%`" if rev is not None else "`N/A`"
+        beat    = (eps or 0) > 0 or (rev or 0) > 0
+        icon    = "🟢" if beat else "🔴"
+        lines.append(f"{icon} *{sym}* — Earnings Released")
+        lines.append(f"   EPS beat: {eps_s}   |   Rev beat: {rev_s}")
+        lines.append("")
+
+    # Stocks expected today but actuals not available yet (AMC / delayed)
+    if due_unreported:
+        syms = "  ".join(f"`{s}`" for s in due_unreported)
+        lines.append(f"⏳ *Still pending:* {syms}")
+        lines.append("_(After-hours reports, check again tomorrow)_")
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
 async def _watchlist_check_loop(app) -> None:
     """Sleep until WATCHLIST_UTC_HOUR:MINUTE (set in config.py), run earnings check, send summary, repeat daily."""
     try:
@@ -395,41 +434,32 @@ async def _watchlist_check_loop(app) -> None:
                 logger.exception("Watchlist earnings check failed")
                 stats = None
 
-            # Send a summary to every active chat
-            if chat_ids:
-                if stats is None:
-                    summary = "❌ *Watchlist Earnings Check*\n\nCheck failed — see server logs."
-                elif stats["due_today"] == 0 and stats["stale_total"] == 0:
-                    summary = (
-                        "📅 *Watchlist Earnings Check*\n\n"
-                        "_No earnings today and no stale dates to refresh._"
-                    )
-                else:
-                    lines = ["📅 *Watchlist Earnings Check*\n"]
-                    if stats["due_today"] > 0:
-                        lines.append(
-                            f"• {stats['due_today']} stock(s) had earnings today"
-                            f" — {stats['notified']} notification(s) sent"
-                        )
-                    if stats["stale_total"] > 0:
-                        lines.append(
-                            f"• {stats['stale_total']} stale date(s) refreshed"
-                            f" ({stats['stale_refreshed']} updated)"
-                        )
-                    summary = "\n".join(lines)
-
+            # Build and send summary — only when something meaningful happened
+            if chat_ids and stats is not None:
+                summary = _build_earnings_summary(stats)
+                if summary:
+                    for cid in chat_ids:
+                        try:
+                            await app.bot.send_message(
+                                chat_id=cid,
+                                text=summary,
+                                parse_mode="Markdown",
+                                reply_markup=InlineKeyboardMarkup([[
+                                    InlineKeyboardButton("⭐ Follow List", callback_data="fl_page_0"),
+                                ]]),
+                            )
+                        except Exception as e:
+                            logger.warning("Watchlist check summary: failed to send to %s: %s", cid, e)
+            elif chat_ids and stats is None:
                 for cid in chat_ids:
                     try:
                         await app.bot.send_message(
                             chat_id=cid,
-                            text=summary,
+                            text="❌ *Watchlist Earnings Check*\n\nCheck failed — see server logs.",
                             parse_mode="Markdown",
-                            reply_markup=InlineKeyboardMarkup([[
-                                InlineKeyboardButton("⭐ Follow List", callback_data="fl_page_0"),
-                            ]]),
                         )
-                    except Exception as e:
-                        logger.warning("Watchlist check summary: failed to send to %s: %s", cid, e)
+                    except Exception:
+                        pass
 
     except asyncio.CancelledError:
         logger.info("Watchlist earnings check loop cancelled")
@@ -504,6 +534,51 @@ def start_positions_updater(app) -> None:
     task = asyncio.create_task(_positions_update_loop(app))
     app.bot_data[key] = task
     logger.info("Daily positions updater started (daily at %02d:%02d UTC)", POSITIONS_UTC_HOUR, POSITIONS_UTC_MINUTE)
+
+
+# ── Watchlist performance check (daily after market close) ───────────────────────
+
+async def _performance_check_loop(app) -> None:
+    """
+    Sleep until WATCHLIST_PERF_UTC_HOUR:MINUTE then check every watchlist stock's
+    gain since it was added. Sends an alert for stocks above WATCHLIST_GAIN_THRESHOLD_PCT.
+    Repeats daily.
+    """
+    try:
+        while True:
+            secs = _seconds_until_next(WATCHLIST_PERF_UTC_HOUR, WATCHLIST_PERF_UTC_MINUTE)
+            logger.info(
+                "Watchlist performance check sleeping %.0f min (next: %s UTC)",
+                secs / 60,
+                (datetime.now(timezone.utc) + timedelta(seconds=secs)).strftime("%Y-%m-%d %H:%M"),
+            )
+            await asyncio.sleep(secs)
+            logger.info(
+                "Running daily watchlist performance check (threshold: +%.1f%%)...",
+                WATCHLIST_GAIN_THRESHOLD_PCT,
+            )
+            try:
+                from services.performance_checker import check_watchlist_performance
+                await check_watchlist_performance(app, WATCHLIST_GAIN_THRESHOLD_PCT)
+            except Exception:
+                logger.exception("Watchlist performance check failed")
+
+    except asyncio.CancelledError:
+        logger.info("Watchlist performance check loop cancelled")
+
+
+def start_performance_checker(app) -> None:
+    """Start the daily watchlist performance check task (once per bot lifetime)."""
+    key      = "_performance_checker_task"
+    existing = app.bot_data.get(key)
+    if existing and not existing.done():
+        return
+    task = asyncio.create_task(_performance_check_loop(app))
+    app.bot_data[key] = task
+    logger.info(
+        "Watchlist performance checker started (daily at %02d:%02d UTC, threshold +%.1f%%)",
+        WATCHLIST_PERF_UTC_HOUR, WATCHLIST_PERF_UTC_MINUTE, WATCHLIST_GAIN_THRESHOLD_PCT,
+    )
 
 
 def _seconds_until_next(hour: int, minute: int, weekday: int | None = None) -> float:

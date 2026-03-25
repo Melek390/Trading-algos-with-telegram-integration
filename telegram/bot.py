@@ -49,7 +49,7 @@ from handlers.adj_close import build_adj_close_handler
 from handlers.ticker_info import build_ticker_info_handler
 from handlers.callbacks import handle_callback
 from handlers.commands import cmd_start
-from services.scheduler import load_scheduler_states, start_scheduler, start_watchlist_checker, start_positions_updater
+from services.scheduler import load_scheduler_states, start_scheduler, start_watchlist_checker, start_positions_updater, start_performance_checker
 
 load_dotenv()
 warnings.filterwarnings("ignore", message=".*per_message=False.*")
@@ -78,6 +78,7 @@ async def _post_init(app) -> None:
         logger.info("Restored scheduler for algo_%s → chat %s", algo_id, chat_id)
     start_watchlist_checker(app)
     start_positions_updater(app)
+    start_performance_checker(app)
     asyncio.create_task(_refresh_stale_earnings(app))
 
 

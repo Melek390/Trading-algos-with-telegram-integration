@@ -35,12 +35,24 @@ if str(PROJECT_DIR) not in sys.path:
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Watchlist earnings check — runs after market close, checks all followed stocks
-WATCHLIST_UTC_HOUR   = 21
-WATCHLIST_UTC_MINUTE = 49
+WATCHLIST_UTC_HOUR   = 20
+WATCHLIST_UTC_MINUTE = 18
 
 # Daily portfolio status update — open positions snapshot sent to all active chats
 POSITIONS_UTC_HOUR   = 20
-POSITIONS_UTC_MINUTE = 55
+POSITIONS_UTC_MINUTE = 22
+
+# ── Watchlist performance alert ────────────────────────────────────────────────
+#
+#   Runs once daily after market close.
+#   Sends a notification for every watchlist stock that is up more than
+#   WATCHLIST_GAIN_THRESHOLD_PCT % from the date it was added.
+#
+#   Adjust WATCHLIST_GAIN_THRESHOLD_PCT at any time — no code change needed.
+#
+WATCHLIST_PERF_UTC_HOUR      = 22   # 23:00 TUN (winter) / 00:00 TUN (summer)
+WATCHLIST_PERF_UTC_MINUTE    = 10
+WATCHLIST_GAIN_THRESHOLD_PCT = 1.0  # notify if stock is up > 1 % from add date
 
 
 # ── Algo metadata ──────────────────────────────────────────────────────────────

@@ -136,14 +136,22 @@ async def check_watchlist_earnings(app) -> dict:
     """
     Run once after market close:
       1. Check all watchlist stocks with earnings_date == today.
-         If Finnhub shows actuals → send per-stock notification, refresh date to next.
+         Collect per-stock results — reported vs still pending.
       2. Refresh all stale earnings dates (past dates) via yfinance.
 
-    Returns a stats dict:
-        {due_today, notified, stale_total, stale_refreshed}
+    Returns a rich stats dict:
+        {
+            due_today     : int,
+            reported      : [{"symbol", "eps_beat_pct", "revenue_beat_pct"}],
+            due_unreported: [str],   # expected today but no actuals yet (AMC / delayed)
+            stale_total   : int,
+            stale_refreshed: int,
+        }
+    The caller (scheduler) is responsible for formatting and sending the summary.
     """
-    loop = asyncio.get_running_loop()
-    notified = 0
+    loop            = asyncio.get_running_loop()
+    reported_list   = []
+    due_unreported  = []
     stale_refreshed = 0
 
     # ── Step 1: Check today's earnings ───────────────────────────────────────
@@ -151,41 +159,31 @@ async def check_watchlist_earnings(app) -> dict:
     logger.info("check_watchlist_earnings: %d stock(s) due today", len(due))
 
     for entry in due:
-        sym      = entry["symbol"]
-        edate    = entry["earnings_date"]
-        chat_id  = entry["chat_id"]
+        sym   = entry["symbol"]
+        edate = entry["earnings_date"]
 
         reported = await loop.run_in_executor(None, _check_reported, sym, edate)
+
         if reported is None:
-            logger.info("check_watchlist_earnings: %s — no actuals yet, skipping", sym)
+            logger.info("check_watchlist_earnings: %s — no actuals yet", sym)
+            due_unreported.append(sym)
             continue
 
-        # Reported — send per-stock notification
-        eps_s = f"{reported['eps_beat_pct']:+.1f}%" if reported["eps_beat_pct"] is not None else "N/A"
-        rev_s = f"{reported['revenue_beat_pct']:+.1f}%" if reported["revenue_beat_pct"] is not None else "N/A"
-        icon  = "🟢" if (
-            (reported["eps_beat_pct"] or 0) > 0 or (reported["revenue_beat_pct"] or 0) > 0
-        ) else "🔴"
-
-        try:
-            await app.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    f"🔔 *{sym} — Earnings Released*\n\n"
-                    f"{icon} EPS beat: `{eps_s}`\n"
-                    f"{icon} Revenue beat: `{rev_s}`\n\n"
-                    f"_Open Follow List to view details or buy._"
-                ),
-                parse_mode="Markdown",
-            )
-            notified += 1
-        except Exception as e:
-            logger.warning("check_watchlist_earnings: failed to notify for %s: %s", sym, e)
+        # Actuals available — store for summary
+        reported_list.append({
+            "symbol":           sym,
+            "eps_beat_pct":     reported["eps_beat_pct"],
+            "revenue_beat_pct": reported["revenue_beat_pct"],
+        })
+        logger.info(
+            "check_watchlist_earnings: %s reported — EPS %s  Rev %s",
+            sym,
+            f"{reported['eps_beat_pct']:+.1f}%" if reported["eps_beat_pct"] is not None else "N/A",
+            f"{reported['revenue_beat_pct']:+.1f}%" if reported["revenue_beat_pct"] is not None else "N/A",
+        )
 
         # Refresh earnings date to the next one
-        next_date = await loop.run_in_executor(
-            None, get_earnings_date_yf, sym, edate,
-        )
+        next_date = await loop.run_in_executor(None, get_earnings_date_yf, sym, edate)
         if next_date:
             update_earnings_date(sym, next_date)
             logger.info("check_watchlist_earnings: %s → next earnings: %s", sym, next_date)
@@ -205,8 +203,9 @@ async def check_watchlist_earnings(app) -> dict:
             logger.info("check_watchlist_earnings: %s — no upcoming date found", sym)
 
     return {
-        "due_today":      len(due),
-        "notified":       notified,
-        "stale_total":    len(stale),
+        "due_today":       len(due),
+        "reported":        reported_list,
+        "due_unreported":  due_unreported,
+        "stale_total":     len(stale),
         "stale_refreshed": stale_refreshed,
     }

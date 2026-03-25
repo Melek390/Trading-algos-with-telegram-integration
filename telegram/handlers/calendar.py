@@ -285,16 +285,23 @@ async def handle_fl_remove(update: Update, context: ContextTypes.DEFAULT_TYPE, s
 
 # ── Stock detail + buy flow ────────────────────────────────────────────────────
 
+def _md(text: str) -> str:
+    """Escape Markdown v1 special characters in a plain-text string."""
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
 def _format_stock_info(sym: str) -> str:
     """Fetch compact stock summary from yfinance."""
     try:
         info    = yf.Ticker(sym).info
-        name    = info.get("longName") or info.get("shortName") or sym
-        sector  = info.get("sector") or "Unknown"
+        name    = _md(info.get("longName") or info.get("shortName") or sym)
+        sector  = _md(info.get("sector") or "Unknown")
         price   = info.get("currentPrice") or info.get("regularMarketPrice")
         mc      = info.get("marketCap")
         pe      = info.get("trailingPE") or info.get("forwardPE")
-        summary = (info.get("longBusinessSummary") or "")[:220]
+        summary = _md((info.get("longBusinessSummary") or "")[:220])
 
         price_s = f"${price:.2f}" if price else "N/A"
         mc_s    = (f"${mc/1e9:.1f}B" if mc and mc >= 1e9
@@ -310,7 +317,7 @@ def _format_stock_info(sym: str) -> str:
         ]
         return "\n".join(l for l in lines if l is not None)
     except Exception as e:
-        return f"`{sym}` — could not fetch info: {e}"
+        return f"`{sym}` — could not fetch info: `{e}`"
 
 
 def _fetch_algo002_features(symbol: str) -> dict | None:
