@@ -48,14 +48,12 @@ from handlers.algo003 import (
     handle_algo003_stop,
     handle_algo003_set_tf,
     handle_algo003_set_sma,
-    handle_algo003_ask_symbols,
+    handle_algo003_setup_pairs,
     handle_algo003_ask_threshold,
     handle_algo003_ask_daily,
     handle_algo003_positions,
     handle_algo003_reports,
     handle_algo003_close_all,
-    handle_algo003_lot_sizes,
-    handle_algo003_ask_lot_size,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,8 +176,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         length = int(data[len("algo003_set_sma_"):])
         await handle_algo003_set_sma(update, context, length=length)
 
-    elif data == "algo003_ask_symbols":
-        await handle_algo003_ask_symbols(update, context)
+    elif data == "algo003_setup_pairs":
+        await handle_algo003_setup_pairs(update, context)
 
     elif data == "algo003_ask_threshold":
         await handle_algo003_ask_threshold(update, context)
@@ -195,13 +193,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     elif data == "algo003_close_all":
         await handle_algo003_close_all(update, context)
-
-    elif data == "algo003_lot_sizes":
-        await handle_algo003_lot_sizes(update, context)
-
-    elif data.startswith("algo003_ask_lot_"):
-        sym = data[len("algo003_ask_lot_"):]
-        await handle_algo003_ask_lot_size(update, context, symbol=sym)
 
     # ── Algo selection ─────────────────────────────────────────────────────────
     elif data.startswith("algo_"):

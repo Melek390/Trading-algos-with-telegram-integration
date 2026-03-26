@@ -70,8 +70,7 @@ def _config_kb() -> InlineKeyboardMarkup:
         for v in [50, 100, 200, 300]
     ]
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📍 Change Symbols",           callback_data="algo003_ask_symbols")],
-        [InlineKeyboardButton("📦 Set Lot Sizes",            callback_data="algo003_lot_sizes")],
+        [InlineKeyboardButton("📍 Set Symbols & Lot Sizes",  callback_data="algo003_setup_pairs")],
         tf_buttons[:4],
         tf_buttons[4:],
         sma_buttons,
@@ -184,20 +183,26 @@ async def handle_algo003_set_sma(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
-async def handle_algo003_ask_symbols(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_algo003_setup_pairs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start guided pair+lot-size setup (up to 4 pairs). Send . to finish early."""
     query   = update.callback_query
     chat_id = query.message.chat_id
-    context.user_data["algo003_awaiting"] = "symbols"
-    context.user_data["algo003_msg_id"]   = query.message.message_id
+
+    # Reset temp collection
+    context.user_data["algo003_pairs_temp"] = []
+    context.user_data["algo003_pair_step"]  = 1
+    context.user_data["algo003_awaiting"]   = "pair_ticker"
+    context.user_data["algo003_msg_id"]     = query.message.message_id
+
     await query.edit_message_text(
-        "📍 *Set Symbols*\n\n"
-        "Send your tickers separated by spaces:\n"
-        "`AAPL MSFT NVDA BTC/USD`\n\n"
-        "_Crypto: use BTC/USD, ETH/USD format_\n"
-        "_Gold: use GLD (ETF proxy — XAU not supported on Alpaca)_",
+        "*📍 Set Symbols & Lot Sizes*\n\n"
+        "You can add up to *4 pairs*.\n"
+        "Send `.` at any time to finish and save.\n\n"
+        "*Pair 1 — Enter ticker:*\n"
+        "_Examples: `AAPL`, `NVDA`, `BTC/USD`, `GLD`_",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("« Cancel", callback_data="algo003_config")
+            InlineKeyboardButton("✖ Cancel", callback_data="algo003_config")
         ]]),
     )
 
@@ -340,101 +345,103 @@ async def handle_algo003_close_all(update: Update, context: ContextTypes.DEFAULT
     )
 
 
-async def handle_algo003_lot_sizes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show per-symbol lot size menu — one edit button per configured symbol."""
-    query   = update.callback_query
-    chat_id = query.message.chat_id
-    cfg     = load_config(chat_id)
-    symbols = cfg.get("symbols", [])
-    lot_sizes = cfg.get("lot_sizes", {})
-
-    if not symbols:
-        await query.edit_message_text(
-            "⚠️ No symbols configured yet. Add symbols first.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("📍 Add Symbols", callback_data="algo003_ask_symbols"),
-                InlineKeyboardButton("« Back",          callback_data="algo003_config"),
-            ]]),
-        )
-        return
-
-    lines = ["*ALGO\\_003 — Lot Sizes per Symbol*\n",
-             "_Tap a symbol to set its lot size in USD._",
-             "_Leave unset to auto-divide ALGO\\_003 capital equally._\n"]
-    for sym in symbols:
-        lot = lot_sizes.get(sym)
-        lot_str = f"`${lot:.0f}`" if lot else "_auto_"
-        lines.append(f"• `{sym}`:  {lot_str}")
-
-    buttons = [
-        [InlineKeyboardButton(f"✏️ {sym}", callback_data=f"algo003_ask_lot_{sym}")]
-        for sym in symbols
-    ]
-    buttons.append([InlineKeyboardButton("« Back", callback_data="algo003_config")])
-
-    await query.edit_message_text(
-        "\n".join(lines),
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
-
-
-async def handle_algo003_ask_lot_size(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str
-) -> None:
-    """Ask user to type the lot size (notional USD) for a specific symbol."""
-    query   = update.callback_query
-    chat_id = query.message.chat_id
-    context.user_data["algo003_awaiting"] = "lot_size"
-    context.user_data["algo003_lot_sym"]  = symbol
-    context.user_data["algo003_msg_id"]   = query.message.message_id
-
-    cfg = load_config(chat_id)
-    current = cfg.get("lot_sizes", {}).get(symbol)
-    current_str = f"`${current:.0f}`" if current else "_auto (equal split)_"
-
-    await query.edit_message_text(
-        f"📦 *Set Lot Size — `{symbol}`*\n\n"
-        f"Current: {current_str}\n\n"
-        f"Send the notional amount in USD you want to invest per trade for `{symbol}`.\n"
-        f"Example: `500` means $500 per trade.\n\n"
-        f"_Send `0` to reset to auto (equal split of ALGO\\_003 capital)._",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("« Cancel", callback_data="algo003_lot_sizes")
-        ]]),
-    )
 
 
 # ── Text input handler (registered as MessageHandler in bot.py) ───────────────
 
 async def handle_algo003_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Captures free-text replies for ALGO_003 config (symbols, SMA, thresholds)."""
+    """Captures free-text replies for ALGO_003 config."""
     awaiting = context.user_data.get("algo003_awaiting")
     if not awaiting:
-        return   # not waiting for input — let other handlers deal with it
+        return
 
     chat_id = update.effective_chat.id
     text    = (update.message.text or "").strip()
+
+    # ── Guided pair+lot-size setup ────────────────────────────────────────────
+    if awaiting == "pair_ticker":
+        if text == ".":
+            await _finish_pair_setup(update, context, chat_id)
+            return
+
+        sym  = text.upper()
+        step = context.user_data.get("algo003_pair_step", 1)
+        context.user_data["algo003_current_sym"] = sym
+        context.user_data["algo003_awaiting"]    = "pair_lot"
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        msg_id = context.user_data.get("algo003_msg_id")
+        prompt = (
+            f"*Pair {step}: `{sym}`*\n\n"
+            f"Enter lot size in USD _(e.g. `500`)_\n"
+            f"or send `.` to use *auto* (equal split of ALGO\\_003 capital):"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=msg_id,
+                text=prompt, parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✖ Cancel", callback_data="algo003_config")
+                ]]),
+            )
+        except Exception:
+            await update.message.reply_text(prompt, parse_mode="Markdown")
+        return
+
+    if awaiting == "pair_lot":
+        sym  = context.user_data.pop("algo003_current_sym", "")
+        step = context.user_data.get("algo003_pair_step", 1)
+        pairs: list = context.user_data.get("algo003_pairs_temp", [])
+
+        try:
+            lot = None if text == "." else float(text)
+            if lot is not None and lot <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            await update.message.reply_text(
+                "⚠️ Enter a number > 0, or `.` for auto.", parse_mode="Markdown"
+            )
+            return
+
+        pairs.append((sym, lot))
+        context.user_data["algo003_pairs_temp"] = pairs
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        if step >= 4:
+            await _finish_pair_setup(update, context, chat_id)
+            return
+
+        step += 1
+        context.user_data["algo003_pair_step"] = step
+        context.user_data["algo003_awaiting"]  = "pair_ticker"
+        msg_id = context.user_data.get("algo003_msg_id")
+        lot_str = f"${pairs[-1][1]:.0f}" if pairs[-1][1] else "auto"
+        prompt = (
+            f"✅ Added `{sym}` — `{lot_str}`\n\n"
+            f"*Pair {step} — Enter ticker* _(or `.` to finish):_"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=msg_id,
+                text=prompt, parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✖ Cancel", callback_data="algo003_config")
+                ]]),
+            )
+        except Exception:
+            await update.message.reply_text(prompt, parse_mode="Markdown")
+        return
+
+    # ── Single-value inputs (threshold / daily / SMA) ─────────────────────────
     context.user_data.pop("algo003_awaiting", None)
-
+    reply = ""
     try:
-        if awaiting == "symbols":
-            raw     = text.upper().split()
-            symbols = [s for s in raw if s]
-            if not symbols:
-                raise ValueError("No symbols provided")
-            save_config(chat_id, {"symbols": symbols})
-            reply = f"✅ Symbols saved: {' '.join(f'`{s}`' for s in symbols)}"
-
-        elif awaiting == "sma":
-            length = int(text)
-            if length < 2 or length > 1000:
-                raise ValueError("SMA length must be between 2 and 1000")
-            save_config(chat_id, {"sma_length": length})
-            reply = f"✅ SMA length set to `{length}`"
-
-        elif awaiting == "threshold":
+        if awaiting == "threshold":
             val = float(text)
             if val <= 0:
                 raise ValueError("Must be > 0")
@@ -448,63 +455,12 @@ async def handle_algo003_text(update: Update, context: ContextTypes.DEFAULT_TYPE
             save_config(chat_id, {"daily_pnl_target": val})
             reply = f"✅ Daily P&L target set to `${val:.2f}`"
 
-        elif awaiting == "lot_size":
-            sym = context.user_data.pop("algo003_lot_sym", None)
-            if not sym:
-                return
-            val = float(text)
-            if val < 0:
-                raise ValueError("Must be ≥ 0 (use 0 to reset to auto)")
-            cfg       = load_config(chat_id)
-            lot_sizes = cfg.get("lot_sizes", {})
-            if val == 0:
-                lot_sizes.pop(sym, None)
-                confirm = f"✅ `{sym}` reset to auto"
-            else:
-                lot_sizes[sym] = val
-                confirm = f"✅ `{sym}` → `${val:.2f}` per trade"
-            save_config(chat_id, {"lot_sizes": lot_sizes})
-
-            # Edit the original inline message back to the lot sizes menu (in-place update)
-            msg_id  = context.user_data.pop("algo003_msg_id", None)
-            cfg     = load_config(chat_id)
-            symbols = cfg.get("symbols", [])
-            lot_sizes_updated = cfg.get("lot_sizes", {})
-            lines   = [f"*ALGO\\_003 — Lot Sizes per Symbol*\n",
-                       f"_{confirm}_\n",
-                       "_Tap a symbol to edit its lot size._\n"]
-            for s in symbols:
-                lot = lot_sizes_updated.get(s)
-                lot_str = f"`${lot:.0f}`" if lot else "_auto_"
-                lines.append(f"• `{s}`:  {lot_str}")
-            buttons = [
-                [InlineKeyboardButton(f"✏️ {s}", callback_data=f"algo003_ask_lot_{s}")]
-                for s in symbols
-            ]
-            buttons.append([InlineKeyboardButton("« Back", callback_data="algo003_config")])
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text="\n".join(lines),
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(buttons),
-                )
-                try:
-                    await update.message.delete()
-                except Exception:
-                    pass
-            except Exception:
-                # Fallback if edit fails
-                await update.message.reply_text(
-                    f"{confirm}\n\n{config_summary(chat_id)}",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("📦 Lot Sizes", callback_data="algo003_lot_sizes"),
-                        InlineKeyboardButton("« Menu",       callback_data="algo_003"),
-                    ]]),
-                )
-            return
+        elif awaiting == "sma":
+            length = int(text)
+            if length < 2 or length > 1000:
+                raise ValueError("SMA length must be between 2 and 1000")
+            save_config(chat_id, {"sma_length": length})
+            reply = f"✅ SMA length set to `{length}`"
 
         else:
             return
@@ -522,3 +478,48 @@ async def handle_algo003_text(update: Update, context: ContextTypes.DEFAULT_TYPE
             InlineKeyboardButton("« Menu",        callback_data="algo_003"),
         ]]),
     )
+
+
+async def _finish_pair_setup(update, context, chat_id: int) -> None:
+    """Save collected pairs and show the config summary."""
+    pairs: list = context.user_data.pop("algo003_pairs_temp", [])
+    context.user_data.pop("algo003_pair_step", None)
+    context.user_data.pop("algo003_awaiting", None)
+    context.user_data.pop("algo003_current_sym", None)
+
+    if not pairs:
+        msg_id = context.user_data.pop("algo003_msg_id", None)
+        text   = "⚠️ No pairs added. Config unchanged."
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=msg_id, text=text,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⚙️ Configure", callback_data="algo003_config")
+                ]]),
+            )
+        except Exception:
+            await update.message.reply_text(text)
+        return
+
+    symbols   = [p[0] for p in pairs]
+    lot_sizes = {p[0]: p[1] for p in pairs if p[1] is not None}
+    save_config(chat_id, {"symbols": symbols, "lot_sizes": lot_sizes})
+
+    lines = ["✅ *Pairs saved!*\n"]
+    for sym, lot in pairs:
+        lot_str = f"`${lot:.0f}`" if lot else "_auto_"
+        lines.append(f"• `{sym}` — {lot_str}")
+    lines.append(f"\n{config_summary(chat_id)}")
+
+    msg_id = context.user_data.pop("algo003_msg_id", None)
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id, message_id=msg_id,
+            text="\n".join(lines), parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⚙️ Configure", callback_data="algo003_config"),
+                InlineKeyboardButton("▶️ Start Bot",  callback_data="algo003_start"),
+            ]]),
+        )
+    except Exception:
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
