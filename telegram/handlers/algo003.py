@@ -321,18 +321,36 @@ async def handle_algo003_close_all(update: Update, context: ContextTypes.DEFAULT
         )
         return
 
+    from alpaca.trading.requests import GetOrdersRequest
+    from alpaca.trading.enums import QueryOrderStatus
+
     client = get_trading_client()
     closed = []
     for pos in positions:
-        sym       = pos["symbol"]
-        is_crypto = _is_crypto(sym)
+        sym        = pos["symbol"]
+        is_crypto  = _is_crypto(sym)
         alpaca_sym = sym.replace("/", "") if is_crypto else sym
         try:
+            # 1. Cancel any pending orders for this symbol first
+            open_orders = client.get_orders(GetOrdersRequest(
+                status=QueryOrderStatus.OPEN, symbols=[alpaca_sym]
+            ))
+            for o in open_orders:
+                try:
+                    client.cancel_order_by_id(o.id)
+                except Exception:
+                    pass
+
+            # 2. Close the position if it exists
             ap = {p.symbol: p for p in client.get_all_positions()}
             ep = float(ap[alpaca_sym].current_price) if alpaca_sym in ap else pos["entry_price"]
-            client.close_position(alpaca_sym)
+            if alpaca_sym in ap:
+                client.close_position(alpaca_sym)
+
             pnl = close_pos(pos["id"], ep, "manual_close")
-            closed.append(f"`{sym}` P&L: `{'+'if pnl>=0 else ''}${pnl:.2f}`")
+            cancelled = len(open_orders)
+            note = f" _(+{cancelled} order{'s' if cancelled != 1 else ''} cancelled)_" if cancelled else ""
+            closed.append(f"`{sym}` P&L: `{'+'if pnl>=0 else ''}${pnl:.2f}`{note}")
         except Exception as e:
             closed.append(f"`{sym}` ❌ {e}")
 
