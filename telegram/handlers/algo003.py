@@ -459,11 +459,52 @@ async def handle_algo003_text(update: Update, context: ContextTypes.DEFAULT_TYPE
             lot_sizes = cfg.get("lot_sizes", {})
             if val == 0:
                 lot_sizes.pop(sym, None)
-                reply = f"✅ Lot size for `{sym}` reset to auto (equal split)"
+                confirm = f"✅ `{sym}` reset to auto"
             else:
                 lot_sizes[sym] = val
-                reply = f"✅ Lot size for `{sym}` set to `${val:.2f}` per trade"
+                confirm = f"✅ `{sym}` → `${val:.2f}` per trade"
             save_config(chat_id, {"lot_sizes": lot_sizes})
+
+            # Edit the original inline message back to the lot sizes menu (in-place update)
+            msg_id  = context.user_data.pop("algo003_msg_id", None)
+            cfg     = load_config(chat_id)
+            symbols = cfg.get("symbols", [])
+            lot_sizes_updated = cfg.get("lot_sizes", {})
+            lines   = [f"*ALGO\\_003 — Lot Sizes per Symbol*\n",
+                       f"_{confirm}_\n",
+                       "_Tap a symbol to edit its lot size._\n"]
+            for s in symbols:
+                lot = lot_sizes_updated.get(s)
+                lot_str = f"`${lot:.0f}`" if lot else "_auto_"
+                lines.append(f"• `{s}`:  {lot_str}")
+            buttons = [
+                [InlineKeyboardButton(f"✏️ {s}", callback_data=f"algo003_ask_lot_{s}")]
+                for s in symbols
+            ]
+            buttons.append([InlineKeyboardButton("« Back", callback_data="algo003_config")])
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text="\n".join(lines),
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+                try:
+                    await update.message.delete()
+                except Exception:
+                    pass
+            except Exception:
+                # Fallback if edit fails
+                await update.message.reply_text(
+                    f"{confirm}\n\n{config_summary(chat_id)}",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("📦 Lot Sizes", callback_data="algo003_lot_sizes"),
+                        InlineKeyboardButton("« Menu",       callback_data="algo_003"),
+                    ]]),
+                )
+            return
 
         else:
             return
