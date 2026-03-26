@@ -87,4 +87,19 @@ ALGOS: dict[str, dict] = {
         "sched_utc_hour":   22,      # 21:20 UTC = 22:20 TUN = 17:20 EST
         "sched_utc_minute": 20,
     },
+    "003": {
+        "name":        "ALGO_003 — SMA Crossover",
+        "description": (
+            "SMA crossover strategy on US stocks and crypto via Alpaca.\n"
+            "Enters long/short on price-SMA crossover, exits on reverse cross.\n"
+            "Per-trade profit threshold + daily P&L target.\n"
+            "Universe: user-defined tickers (e.g. AAPL, MSFT, BTC/USD)"
+        ),
+        "table":       "algo_003_positions",
+        "flag":        None,         # no pipeline — runs its own live loop
+        "signal":      False,
+        "tradeable":   False,        # handled by its own SMA runner
+        "schedulable": False,
+        "sma_bot":     True,         # marks this as the live SMA bot
+    },
 }

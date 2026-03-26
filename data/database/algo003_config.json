@@ -1,0 +1,14 @@
+{
+  "8436224599": {
+    "symbols": [
+      "BTC/USD",
+      "AAPL",
+      "GLD",
+      "ETH/USD"
+    ],
+    "timeframe": "M15",
+    "sma_length": 200,
+    "profit_threshold": 100.0,
+    "daily_pnl_target": 20000.0
+  }
+}

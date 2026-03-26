@@ -1,15 +1,20 @@
 """
 capital_manager.py
 ──────────────────
-Divides Alpaca paper account equity equally across active algorithms.
-
-Current split: equity / 2  (ALGO_001 + ALGO_002)
+Fixed capital allocation across three algorithms:
+  ALGO_001  20 %  (Dual Momentum)
+  ALGO_002  30 %  (Revenue Beat Explosion)
+  ALGO_003  50 %  (SMA Crossover)
 """
 
 from portfolio_manager.client import get_trading_client
 
-# Number of active algorithms — change this to adjust the capital split
-_N_ALGOS = 2
+# Fixed allocation per algo (must sum to 1.0)
+_ALLOCATIONS: dict[str, float] = {
+    "001": 0.20,
+    "002": 0.30,
+    "003": 0.50,
+}
 
 
 def get_account_equity() -> float:
@@ -22,20 +27,19 @@ def get_account_equity() -> float:
 def get_algo_capital(algo_id: str) -> float:
     """
     Return the USD amount allocated to a given algo.
-    Each algo receives an equal share: equity / _N_ALGOS.
+    ALGO_001 = 20 %, ALGO_002 = 30 %, ALGO_003 = 50 %.
     """
     equity = get_account_equity()
-    return round(equity / _N_ALGOS, 2)
+    pct    = _ALLOCATIONS.get(algo_id, 1.0 / len(_ALLOCATIONS))
+    return round(equity * pct, 2)
 
 
 def get_allocation_summary() -> dict:
-    """Return a breakdown of total equity and per-algo allocation."""
-    equity   = get_account_equity()
-    per_algo = round(equity / _N_ALGOS, 2)
+    """Return a full breakdown of equity and per-algo allocation."""
+    equity = get_account_equity()
     return {
         "total_equity": equity,
-        "n_algos":      _N_ALGOS,
-        "per_algo":     per_algo,
-        "algo_001":     per_algo,
-        "algo_002":     per_algo,
+        "algo_001":     round(equity * _ALLOCATIONS["001"], 2),
+        "algo_002":     round(equity * _ALLOCATIONS["002"], 2),
+        "algo_003":     round(equity * _ALLOCATIONS["003"], 2),
     }

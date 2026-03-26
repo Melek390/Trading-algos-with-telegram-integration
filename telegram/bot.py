@@ -43,12 +43,13 @@ if str(_HERE) not in sys.path:
 
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from handlers.adj_close import build_adj_close_handler
 from handlers.ticker_info import build_ticker_info_handler
 from handlers.callbacks import handle_callback
 from handlers.commands import cmd_start
+from handlers.algo003 import handle_algo003_text
 from services.scheduler import load_scheduler_states, start_scheduler, start_watchlist_checker, start_positions_updater, start_performance_checker
 
 load_dotenv()
@@ -96,6 +97,7 @@ def main() -> None:
     app.add_handler(build_adj_close_handler())       # must be before catch-all
     app.add_handler(build_ticker_info_handler())     # must be before catch-all
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_algo003_text))
 
     logger.info("Bot started — polling for updates (Ctrl+C to stop)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

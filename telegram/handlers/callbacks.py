@@ -41,6 +41,22 @@ from services.scheduler import (
     status_footer,
     stop_scheduler,
 )
+from handlers.algo003 import (
+    handle_algo003_menu,
+    handle_algo003_configure,
+    handle_algo003_start,
+    handle_algo003_stop,
+    handle_algo003_set_tf,
+    handle_algo003_set_sma,
+    handle_algo003_ask_symbols,
+    handle_algo003_ask_threshold,
+    handle_algo003_ask_daily,
+    handle_algo003_positions,
+    handle_algo003_reports,
+    handle_algo003_close_all,
+    handle_algo003_lot_sizes,
+    handle_algo003_ask_lot_size,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +156,52 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode="Markdown",
             reply_markup=back_only(),
         )
+
+    # ── ALGO_003 (SMA Crossover) — must come before generic algo_ handler ──────
+    elif data == "algo_003":
+        await handle_algo003_menu(update, context)
+
+    elif data == "algo003_config":
+        await handle_algo003_configure(update, context)
+
+    elif data == "algo003_start":
+        await handle_algo003_start(update, context)
+
+    elif data == "algo003_stop":
+        await handle_algo003_stop(update, context)
+
+    elif data.startswith("algo003_set_tf_"):
+        tf = data[len("algo003_set_tf_"):]
+        await handle_algo003_set_tf(update, context, tf=tf)
+
+    elif data.startswith("algo003_set_sma_"):
+        length = int(data[len("algo003_set_sma_"):])
+        await handle_algo003_set_sma(update, context, length=length)
+
+    elif data == "algo003_ask_symbols":
+        await handle_algo003_ask_symbols(update, context)
+
+    elif data == "algo003_ask_threshold":
+        await handle_algo003_ask_threshold(update, context)
+
+    elif data == "algo003_ask_daily":
+        await handle_algo003_ask_daily(update, context)
+
+    elif data == "algo003_positions":
+        await handle_algo003_positions(update, context)
+
+    elif data == "algo003_reports":
+        await handle_algo003_reports(update, context)
+
+    elif data == "algo003_close_all":
+        await handle_algo003_close_all(update, context)
+
+    elif data == "algo003_lot_sizes":
+        await handle_algo003_lot_sizes(update, context)
+
+    elif data.startswith("algo003_ask_lot_"):
+        sym = data[len("algo003_ask_lot_"):]
+        await handle_algo003_ask_lot_size(update, context, symbol=sym)
 
     # ── Algo selection ─────────────────────────────────────────────────────────
     elif data.startswith("algo_"):

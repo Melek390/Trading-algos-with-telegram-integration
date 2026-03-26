@@ -145,7 +145,7 @@ def execute() -> TradeResult:
         db_pos = get_current_position_001()
         if db_pos:
             exit_price = float(positions[current].current_price) if current in positions else None
-            close_position_001(db_pos["id"], exit_price, "rebalance")
+            close_position_001(db_pos["id"], exit_price, "signal_switch")
 
     # ── 6. Buy target — DAY order (required for notional/fractional by Alpaca) ──
     #    Tries notional first (paper / fractional-enabled accounts).
