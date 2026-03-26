@@ -17,12 +17,7 @@ At least one of:
   - eps_beat_pct     >= +1%
   - revenue_beat_pct >= +1%
 
-GATE CONDITIONS  (market-wide — ALL must pass)
------------------------------------------------
-G1  VIX < 30             — not in extreme fear
-G2  IWM 20d return > 0   — small-cap uptrend
-
-17 CONDITIONS  (12/17 must be True to qualify)
+17 CONDITIONS  (11/17 must be True to qualify)
 ----------------------------------------------
 C01  volume_ratio          >= 1.5      — institutional volume surge
 C02  iwm_20d_return        >  0        — broad market uptrend
@@ -60,7 +55,7 @@ from typing import Optional
 _DB_PATH = Path(__file__).resolve().parent.parent / "data" / "database" / "stocks.db"
 
 _MIN_BEAT_PCT        = 1.0   # minimum eps or revenue beat % to be considered
-_MIN_CONDITIONS      = 12    # conditions that must pass out of 17 (was 14)
+_MIN_CONDITIONS      = 11    # conditions that must pass out of 17
 _MIN_CONSECUTIVE     = 1     # consecutive beats required (was 2)
 _MIN_AVG_BEAT_4Q     = 0.0   # avg eps beat % over last 4q (was 2.0)
 _MIN_MARKET_CAP      = 500e6 # minimum market cap (was 2e9)
@@ -247,27 +242,6 @@ def get_signal(top_n: int = 5, db_path: Path = _DB_PATH) -> Signal002:
     qualified.sort(key=lambda x: x[1], reverse=True)
     near_misses.sort(key=lambda x: (x[2], x[1]), reverse=True)
     top_near_misses = near_misses[:3]
-
-    # ── Gate G1: VIX < 30 ──────────────────────────────────────────────────────
-    if vix is not None and float(vix) >= 30:
-        return Signal002(
-            candidates=[], near_misses=top_near_misses, gate_passed=False,
-            gate_reason=f"VIX={vix:.1f} >= 30 — extreme market fear. No positions.",
-            n_qualified=0, n_total=len(rows),
-            snapshot_date=snapshot_date, vix=vix, iwm_ret=iwm_ret,
-        )
-
-    # ── Gate G2: IWM 20d return > 0 ────────────────────────────────────────────
-    if iwm_ret is not None and float(iwm_ret) <= 0:
-        return Signal002(
-            candidates=[], near_misses=top_near_misses, gate_passed=False,
-            gate_reason=(
-                f"IWM 20d return={iwm_ret:.2f}% <= 0 — "
-                "small-cap market in downtrend. No positions."
-            ),
-            n_qualified=0, n_total=len(rows),
-            snapshot_date=snapshot_date, vix=vix, iwm_ret=iwm_ret,
-        )
 
     return Signal002(
         candidates    = qualified[:top_n],

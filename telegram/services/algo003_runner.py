@@ -80,10 +80,20 @@ def get_daily_state(bot_data: dict, chat_id: int) -> dict:
 
 # ── Internal loops ────────────────────────────────────────────────────────────
 
+def _us_market_open() -> bool:
+    """Return True if the US stock market is currently open (via Alpaca clock)."""
+    try:
+        from portfolio_manager.client import get_trading_client
+        clock = get_trading_client().get_clock()
+        return bool(clock.is_open)
+    except Exception:
+        return True   # fail open — don't silently block trading on API errors
+
+
 async def _sma_loop(app, chat_id: int) -> None:
     """Main candle-close loop — runs the SMA cycle on each candle."""
     from portfolio_manager.trader.algo003_config import load_config
-    from portfolio_manager.trader.algo003_trader import run_sma_cycle, seconds_to_next_candle
+    from portfolio_manager.trader.algo003_trader import run_sma_cycle, seconds_to_next_candle, _is_crypto
 
     logger.info("algo003: _sma_loop started for chat_id=%s", chat_id)
 
@@ -104,7 +114,14 @@ async def _sma_loop(app, chat_id: int) -> None:
 
             all_exits = []
 
+            market_open = await asyncio.get_event_loop().run_in_executor(None, _us_market_open)
+
             for symbol in cfg["symbols"]:
+                # Skip US stocks when market is closed; crypto runs 24/7
+                if not _is_crypto(symbol) and not market_open:
+                    logger.info("algo003: market closed — skipping %s", symbol)
+                    continue
+
                 try:
                     result = await asyncio.get_event_loop().run_in_executor(
                         None, run_sma_cycle, symbol, cfg
