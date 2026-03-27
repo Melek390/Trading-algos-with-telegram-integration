@@ -439,7 +439,7 @@ def get_report_chart(algo_id: str, period: str = "monthly", db_path: Path = _DEF
 
     title = f"ALGO_00{algo_id} — {algo_name}  |  {period_label}"
 
-    if not y_vals or all(v == 0 for v in y_vals):
+    if not y_vals or not rows:
         ax.text(0.5, 0.5, "No closed positions in this period",
                 ha="center", va="center", color="#aaaaaa", transform=ax.transAxes, fontsize=11)
         ax.set_title(title, color="#eeeeee", fontsize=10, pad=8)
