@@ -323,25 +323,27 @@ def get_report(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> str:
 
 # ── Chart ──────────────────────────────────────────────────────────────────────
 
-def _fetch_closed_since(table: str, start: str, db_path: Path) -> list[dict]:
-    """Fetch closed positions since `start` date, ordered by exit_date.
-    Retroactively heals NULL pnl_pct rows that have entry+exit prices.
-    """
+def _fetch_closed_since(table: str, start: str, db_path: Path, algo_id: str = "001") -> list[dict]:
+    """Fetch closed positions since `start` date, ordered by exit_date."""
     if not db_path.exists():
         return []
+    # ALGO_003 stores dollar P&L in 'pnl'; others store percent in 'pnl_pct'
+    pnl_col = "pnl" if algo_id == "003" else "pnl_pct"
     try:
         with _conn(db_path) as conn:
-            conn.execute(f"""
-                UPDATE {table}
-                   SET pnl_pct = ROUND((exit_price - entry_price) / entry_price * 100, 4)
-                 WHERE status = 'closed'
-                   AND pnl_pct IS NULL
-                   AND entry_price IS NOT NULL AND entry_price != 0
-                   AND exit_price  IS NOT NULL
-            """)
+            if algo_id != "003":
+                # Heal NULL pnl_pct rows for non-ALGO_003 tables
+                conn.execute(f"""
+                    UPDATE {table}
+                       SET pnl_pct = ROUND((exit_price - entry_price) / entry_price * 100, 4)
+                     WHERE status = 'closed'
+                       AND pnl_pct IS NULL
+                       AND entry_price IS NOT NULL AND entry_price != 0
+                       AND exit_price  IS NOT NULL
+                """)
             rows = conn.execute(
                 f"""
-                SELECT exit_date, pnl_pct FROM {table}
+                SELECT exit_date, {pnl_col} AS pnl_value FROM {table}
                 WHERE status = 'closed'
                   AND exit_date >= ?
                   AND exit_date IS NOT NULL
@@ -372,7 +374,7 @@ def get_report_chart(algo_id: str, period: str = "monthly", db_path: Path = _DEF
 
     algo_name = _ALGO_NAMES.get(algo_id, f"ALGO_{algo_id}")
     start, end = _date_range(period)
-    rows = _fetch_closed_since(table, start, db_path)
+    rows = _fetch_closed_since(table, start, db_path, algo_id)
 
     # ── Build daily or weekly P&L buckets ────────────────────────────────────
     from collections import defaultdict
@@ -383,7 +385,7 @@ def get_report_chart(algo_id: str, period: str = "monthly", db_path: Path = _DEF
         for r in rows:
             try:
                 d   = date.fromisoformat(r["exit_date"])
-                pnl = float(r["pnl_pct"]) if r["pnl_pct"] is not None else 0.0
+                pnl = float(r["pnl_value"]) if r["pnl_value"] is not None else 0.0
                 bucket[f"{d.isocalendar()[0]}-W{d.isocalendar()[1]:02d}"] += pnl
             except Exception:
                 continue
@@ -403,7 +405,7 @@ def get_report_chart(algo_id: str, period: str = "monthly", db_path: Path = _DEF
         bucket = defaultdict(float)
         for r in rows:
             try:
-                pnl = float(r["pnl_pct"]) if r["pnl_pct"] is not None else 0.0
+                pnl = float(r["pnl_value"]) if r["pnl_value"] is not None else 0.0
                 bucket[r["exit_date"]] += pnl
             except Exception:
                 continue
