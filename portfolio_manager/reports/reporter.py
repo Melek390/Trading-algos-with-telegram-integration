@@ -28,20 +28,25 @@ _DEFAULT_DB = (
 _ALGO_NAMES = {
     "001": "Dual Momentum",
     "002": "Revenue Beat Explosion",
+    "003": "SMA Crossover",
 }
 
 _TABLES = {
     "001": "algo_001_positions",
     "002": "algo_002_positions",
+    "003": "algo_003_positions",
 }
 
 _REASON_LABELS = {
-    "take_profit":  "TP +2%",
-    "stop_loss":    "SL -1%",
-    "time_exit":    "3wk exit",
-    "bracket_exit": "bracket",
-    "rebalance":    "rebalance",
-    "manual_close": "manual close",
+    "take_profit":    "TP +2%",
+    "stop_loss":      "SL -1%",
+    "time_exit":      "3wk exit",
+    "bracket_exit":   "bracket",
+    "rebalance":      "rebalance",
+    "signal_switch":  "signal switch",
+    "sma_exit":       "SMA cross",
+    "profit_threshold": "profit target",
+    "manual_close":   "manual close",
 }
 
 
@@ -150,9 +155,19 @@ def _alpaca_open_001() -> list[dict]:
 
 # ── Formatters ────────────────────────────────────────────────────────────────
 
-def _stats_block(rows: list[dict]) -> list[str]:
+def _get_pnl(r: dict, algo_id: str):
+    """Return the PnL value and unit label for a row, handling both % and $ algos."""
+    if algo_id == "003":
+        v = r.get("pnl")
+        return (float(v), "$") if v is not None else (None, "$")
+    v = r.get("pnl_pct")
+    return (float(v), "%") if v is not None else (None, "%")
+
+
+def _stats_block(rows: list[dict], algo_id: str = "001") -> list[str]:
     """Return Markdown lines summarising win rate, avg/total/best/worst PnL for closed rows."""
-    pnls = [r["pnl_pct"] for r in rows if r.get("pnl_pct") is not None]
+    pnls = [_get_pnl(r, algo_id)[0] for r in rows if _get_pnl(r, algo_id)[0] is not None]
+    unit = "$" if algo_id == "003" else "%"
     if not pnls:
         return []
     wins     = sum(1 for p in pnls if p > 0)
@@ -162,9 +177,10 @@ def _stats_block(rows: list[dict]) -> list[str]:
     total    = sum(pnls)
     best     = max(pnls)
     worst    = min(pnls)
+    fmt = (lambda v: f"{v:+.2f}{unit}") if unit == "%" else (lambda v: f"{'+' if v>=0 else ''}{v:.2f}{unit}")
     return [
         f"*Closed:* {len(rows)}   *Win rate:* {win_rate:.0f}%  ({wins}W / {losses}L)",
-        f"*Avg:* {avg_pnl:+.2f}%   *Total:* {total:+.2f}%   *Best:* {best:+.2f}%   *Worst:* {worst:+.2f}%",
+        f"*Avg:* {fmt(avg_pnl)}   *Total:* {fmt(total)}   *Best:* {fmt(best)}   *Worst:* {fmt(worst)}",
     ]
 
 
@@ -175,10 +191,14 @@ def _closed_block(rows: list[dict], algo_id: str) -> list[str]:
     lines = ["*Closed Positions:*"]
     for r in rows:
         sym    = r.get("symbol", "?")
-        pnl    = f"{r['pnl_pct']:+.2f}%" if r.get("pnl_pct") is not None else "N/A"
+        pnl_v, unit = _get_pnl(r, algo_id)
+        if pnl_v is not None:
+            pnl = f"{'+' if pnl_v >= 0 else ''}{pnl_v:.2f}{unit}"
+        else:
+            pnl = "N/A"
         reason = _REASON_LABELS.get(r.get("exit_reason", ""), r.get("exit_reason") or "—")
         xdate  = r.get("exit_date", "")
-        if algo_id == "002":
+        if algo_id in ("002", "003"):
             entry  = r.get("entry_price")
             exit_p = r.get("exit_price")
             price  = f"${entry:.2f}→${exit_p:.2f}  " if entry and exit_p else ""
@@ -272,7 +292,7 @@ def get_report(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> str:
 
     # Stats (closed only)
     if closed:
-        parts += _stats_block(closed) + [""]
+        parts += _stats_block(closed, algo_id) + [""]
 
     # Closed positions
     parts += _closed_block(closed, algo_id)
