@@ -35,23 +35,16 @@ if str(PROJECT_DIR) not in sys.path:
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Watchlist earnings check — runs after market close, checks all followed stocks
-WATCHLIST_UTC_HOUR   = 20
-WATCHLIST_UTC_MINUTE = 18
+WATCHLIST_UTC_HOUR   = 15
+WATCHLIST_UTC_MINUTE = 35
 
 # Daily portfolio status update — open positions snapshot sent to all active chats
-POSITIONS_UTC_HOUR   = 20
-POSITIONS_UTC_MINUTE = 22
+POSITIONS_UTC_HOUR   = 15
+POSITIONS_UTC_MINUTE = 40
 
 # ── Watchlist performance alert ────────────────────────────────────────────────
-#
-#   Runs once daily after market close.
-#   Sends a notification for every watchlist stock that is up more than
-#   WATCHLIST_GAIN_THRESHOLD_PCT % from the date it was added.
-#
-#   Adjust WATCHLIST_GAIN_THRESHOLD_PCT at any time — no code change needed.
-#
-WATCHLIST_PERF_UTC_HOUR      = 22   # 23:00 TUN (winter) / 00:00 TUN (summer)
-WATCHLIST_PERF_UTC_MINUTE    = 10
+WATCHLIST_PERF_UTC_HOUR      = 15
+WATCHLIST_PERF_UTC_MINUTE    = 45
 WATCHLIST_GAIN_THRESHOLD_PCT = 1.0  # notify if stock is up > 1 % from add date
 
 
@@ -69,8 +62,8 @@ ALGOS: dict[str, dict] = {
         "signal":      False,        # handled by auto-refresh scheduler
         "tradeable":   True,         # auto-executes trade after pipeline refresh
         "schedulable": True,
-        "sched_utc_hour":   20,      # 21:00 UTC = 22:00 TUN = 17:00 EST
-        "sched_utc_minute":  00,
+        "sched_utc_hour":   15,      # 16:25 TUN = test run
+        "sched_utc_minute": 25,
     },
     "002": {
         "name":        "ALGO_002 — Revenue Beat Explosion",
@@ -84,8 +77,8 @@ ALGOS: dict[str, dict] = {
         "signal":      False,        # handled by auto-refresh scheduler
         "tradeable":   True,         # scheduler executes trades automatically
         "schedulable": True,
-        "sched_utc_hour":   22,      # 21:20 UTC = 22:20 TUN = 17:20 EST
-        "sched_utc_minute": 20,
+        "sched_utc_hour":   15,      # 16:30 TUN = test run
+        "sched_utc_minute": 30,
     },
     "003": {
         "name":        "ALGO_003 — SMA Crossover",
