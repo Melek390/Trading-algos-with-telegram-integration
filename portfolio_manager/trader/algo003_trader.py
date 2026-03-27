@@ -311,16 +311,26 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
             if price <= 0:
                 raise ValueError(f"Could not get price for {symbol}")
 
-            qty = math.floor(notional / price)
-            if qty < 1:
-                raise ValueError(f"Insufficient capital: ${notional:.0f} < ${price:.2f}/share")
-
-            order = client.submit_order(MarketOrderRequest(
-                symbol=alpaca_sym,
-                qty=qty,
-                side=side,
-                time_in_force=TimeInForce.GTC,
-            ))
+            if is_crypto:
+                # Crypto supports fractional qty — round to 6 decimal places
+                qty = round(notional / price, 6)
+                if qty <= 0:
+                    raise ValueError(f"Notional too small: ${notional:.0f} for {symbol} @ ${price:.2f}")
+                order = client.submit_order(MarketOrderRequest(
+                    symbol=alpaca_sym,
+                    qty=qty,
+                    side=side,
+                    time_in_force=TimeInForce.GTC,
+                ))
+            else:
+                # Stocks — use notional (dollar amount) so Alpaca handles fractional shares
+                qty = round(notional / price, 4)
+                order = client.submit_order(MarketOrderRequest(
+                    symbol=alpaca_sym,
+                    notional=round(notional, 2),
+                    side=side,
+                    time_in_force=TimeInForce.DAY,  # required for notional orders
+                ))
 
             row_id = open_pos(symbol, direction, price, qty, notional, str(order.id), db_path)
             result.entries.append({
@@ -331,7 +341,7 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
                 "order_id":  str(order.id),
                 "row_id":    row_id,
             })
-            logger.info("algo003: ENTER %s %s qty=%d price=%.4f", direction.upper(), symbol, qty, price)
+            logger.info("algo003: ENTER %s %s qty=%.6f price=%.4f", direction.upper(), symbol, qty, price)
 
         except Exception as e:
             logger.error("algo003: entry failed for %s %s: %s", direction, symbol, e)
