@@ -67,7 +67,7 @@ def _config_kb() -> InlineKeyboardMarkup:
     ]
     sma_buttons = [
         InlineKeyboardButton(str(v), callback_data=f"algo003_set_sma_{v}")
-        for v in [50, 100, 200, 300]
+        for v in [20, 50, 100, 200, 300]
     ]
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📍 Set Symbols & Lot Sizes",  callback_data="algo003_setup_pairs")],
