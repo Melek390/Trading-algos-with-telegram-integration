@@ -108,7 +108,23 @@ def _fetch_open(table: str, db_path: Path) -> list[dict]:
 
 
 def _current_price(sym: str) -> float | None:
-    """Fetch the latest market price for a symbol via yfinance fast_info."""
+    """Fetch the latest market price. Handles stocks (yfinance) and crypto (Alpaca)."""
+    if "/" in sym:
+        # Crypto symbol in Alpaca format (BTC/USD) — try Alpaca first, then yfinance
+        try:
+            from portfolio_manager.client import get_trading_client
+            alpaca_sym = sym.replace("/", "")
+            ap = {p.symbol: p for p in get_trading_client().get_all_positions()}
+            if alpaca_sym in ap:
+                return float(ap[alpaca_sym].current_price)
+        except Exception:
+            pass
+        try:
+            yf_sym = sym.replace("/", "-")   # BTC/USD → BTC-USD
+            p = yf.Ticker(yf_sym).fast_info.last_price
+            return float(p) if p else None
+        except Exception:
+            return None
     try:
         p = yf.Ticker(sym).fast_info.last_price
         return float(p) if p else None
