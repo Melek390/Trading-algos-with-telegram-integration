@@ -501,6 +501,16 @@ async def _positions_update_loop(app) -> None:
                 logger.info("Daily positions update: no active schedulers — skipping")
                 continue
 
+            # Clean up ALGO_002 ghost positions (in DB but gone from Alpaca)
+            try:
+                from portfolio_manager.client import get_trading_client
+                from portfolio_manager.positions.position_monitor import run_monitoring_cycle
+                loop = asyncio.get_event_loop()
+                _client = get_trading_client()
+                await loop.run_in_executor(None, run_monitoring_cycle, _client, None)
+            except Exception as e:
+                logger.warning("Ghost position cleanup failed: %s", e)
+
             try:
                 from services.portfolio import portfolio_status_text
                 loop = asyncio.get_event_loop()

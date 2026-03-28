@@ -38,7 +38,7 @@ _MAX_HOLD_DAYS   = 21     # 3 weeks
 # ── Condition checker (used by algo002_trader.py for entry filtering) ──────────
 
 _MIN_BEAT_PCT    = 1.0   # minimum eps or revenue beat % (mirrors algo002.py)
-_MIN_CONDITIONS  = 12    # conditions that must pass out of 17 (mirrors algo002.py)
+_MIN_CONDITIONS  = 11    # conditions that must pass out of 17 (mirrors algo002.py)
 _MIN_CONSECUTIVE = 1     # consecutive beats required
 _MIN_AVG_BEAT_4Q = 0.0   # avg eps beat % over last 4q
 _MIN_MARKET_CAP  = 500e6 # minimum market cap
@@ -111,8 +111,11 @@ def _fetch_price(sym: str) -> float | None:
 
 def run_monitoring_cycle(
     alpaca_client,
-    db_path: Path,
+    db_path: Path | None = None,
 ) -> list[dict]:
+    if db_path is None:
+        from portfolio_manager.positions.position_store import _DEFAULT_DB
+        db_path = _DEFAULT_DB
     """
     Check every open DB position for exit conditions and record any closures.
 
