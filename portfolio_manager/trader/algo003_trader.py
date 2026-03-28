@@ -352,7 +352,11 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
             all_pos = {p.symbol: p for p in client.get_all_positions()}
             try:
                 import yfinance as yf
-                yf_sym = symbol.replace("/", "-") if is_crypto else symbol
+                # USDC pairs: SOL/USDC → SOL-USD (yfinance has no USDC pairs; USDC ≈ $1)
+                if usdc_pair:
+                    yf_sym = symbol.replace("/USDC", "-USD")
+                else:
+                    yf_sym = symbol.replace("/", "-") if is_crypto else symbol
                 price = float(yf.Ticker(yf_sym).fast_info.last_price or 0)
             except Exception:
                 price = 0.0
