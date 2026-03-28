@@ -323,6 +323,15 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
         result.error = "Insufficient data"
         return result
 
+    close      = float(df_sma["close"].iloc[-2])
+    sma_val    = float(df_sma["sma"].iloc[-2])
+    prev_close = float(df_sma["close"].iloc[-3])
+    prev_sma   = float(df_sma["sma"].iloc[-3])
+    logger.info(
+        "algo003: %s signal check | close=%.4f sma=%.4f prev_close=%.4f prev_sma=%.4f | long=%s short=%s exit_long=%s exit_short=%s",
+        symbol, close, sma_val, prev_close, prev_sma, long_sig, short_sig, exit_long, exit_short
+    )
+
     # ── 2. Check open positions ────────────────────────────────────────────────
     open_positions = get_open_pos(symbol, db_path)
     has_long  = any(p["direction"] == "long"  for p in open_positions)
