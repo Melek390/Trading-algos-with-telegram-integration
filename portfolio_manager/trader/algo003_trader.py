@@ -66,6 +66,54 @@ def _alpaca_crypto_sym(symbol: str) -> str:
     return symbol                         # BTC/USDC, SOL/USDC, etc.
 
 
+def _ensure_usdc(client, needed: float):
+    """
+    Alpaca requires actual USDC balance to trade USDC pairs.
+    Buy only the shortfall so we don't accumulate idle USDC.
+    """
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.requests import MarketOrderRequest
+    try:
+        positions = {p.symbol: p for p in client.get_all_positions()}
+        have = float(positions["USDC/USD"].qty) if "USDC/USD" in positions else 0.0
+    except Exception:
+        have = 0.0
+    shortfall = round(needed - have, 2)
+    if shortfall <= 1:
+        return   # already have enough
+    logger.info("algo003: buying %.2f USDC (have %.2f, need %.2f)", shortfall, have, needed)
+    client.submit_order(MarketOrderRequest(
+        symbol="USDC/USD",
+        qty=shortfall,
+        side=OrderSide.BUY,
+        time_in_force=TimeInForce.GTC,
+    ))
+
+
+def _release_usdc(client, usdc_qty: float):
+    """Sell USDC back to USD after closing a USDC pair position."""
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.requests import MarketOrderRequest
+    try:
+        positions = {p.symbol: p for p in client.get_all_positions()}
+        have = float(positions["USDC/USD"].qty) if "USDC/USD" in positions else 0.0
+    except Exception:
+        have = 0.0
+    sell_qty = round(min(usdc_qty, have), 2)
+    if sell_qty <= 1:
+        return
+    logger.info("algo003: selling %.2f USDC back to USD", sell_qty)
+    try:
+        client.submit_order(MarketOrderRequest(
+            symbol="USDC/USD",
+            qty=sell_qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC,
+        ))
+    except Exception as e:
+        logger.warning("algo003: USDC→USD release failed: %s", e)
+
+
 
 
 def _get_bars(symbol: str, timeframe: str, limit: int = 350) -> pd.DataFrame:
@@ -289,6 +337,8 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
 
             if key in ap:
                 client.close_position(key)
+                if _is_usdc_pair(symbol):
+                    _release_usdc(client, round(pos["shares"] * float(ap[key].current_price), 2))
 
             ep   = float(ap[key].current_price) if key in ap else pos["entry_price"]
             pnl  = close_pos(pos["id"], ep, "sma_exit", db_path)
@@ -334,6 +384,10 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
                 raise ValueError(f"Could not get price for {symbol}")
 
             if is_crypto:
+                # USDC pairs: ensure we hold enough USDC before submitting the order
+                if usdc_pair and direction == "long":
+                    _ensure_usdc(client, notional)
+
                 # Crypto supports fractional qty — round to 6 decimal places
                 qty = round(notional / price, 6)
                 if qty <= 0:
@@ -434,6 +488,8 @@ def check_profit_threshold(cfg: dict, db_path=_DEFAULT_DB) -> list[dict]:
             if unrealized >= threshold:
                 try:
                     client.close_position(alpaca_sym)
+                    if _is_usdc_pair(sym):
+                        _release_usdc(client, round(pos["shares"] * cur_price, 2))
                     pnl = close_pos(pos["id"], cur_price, "profit_threshold", db_path)
                     closed.append({"symbol": sym, "pnl": pnl, "unrealized": unrealized})
                     logger.info("algo003: threshold hit %s unrealized=%.2f pnl=%.2f", sym, unrealized, pnl)
@@ -456,6 +512,10 @@ def _close_all_for_symbol(symbol: str, client, db_path: Path, is_crypto: bool) -
         ap = {p.symbol: p for p in client.get_all_positions()}
         if alpaca_sym in ap:
             client.close_position(alpaca_sym)
+            if usdc_pair:
+                for pos in get_open_pos(symbol, db_path):
+                    _release_usdc(client, round(pos["shares"] * float(ap[alpaca_sym].current_price), 2))
+                    break
     except Exception:
         pass
     for pos in get_open_pos(symbol, db_path):
