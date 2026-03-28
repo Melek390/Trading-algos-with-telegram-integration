@@ -55,6 +55,17 @@ def _is_usdc_pair(symbol: str) -> bool:
     return symbol.upper().endswith("/USDC")
 
 
+def _alpaca_crypto_sym(symbol: str) -> str:
+    """
+    Return the Alpaca order symbol for a crypto pair.
+    USD pairs:  BTC/USD  → BTCUSD   (no slash — Alpaca convention)
+    USDC pairs: BTC/USDC → BTC/USDC (keep slash — Alpaca requires it for non-USD quote)
+    """
+    if symbol.upper().endswith("/USD"):
+        return symbol.replace("/", "")   # BTCUSD
+    return symbol                         # BTC/USDC, SOL/USDC, etc.
+
+
 def _buy_usdc_with_usd(client, notional: float):
     """Step 1 for USDC pairs: convert USD → USDC before buying the pair."""
     from alpaca.trading.enums import OrderSide, TimeInForce
@@ -312,7 +323,7 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
             continue
 
         try:
-            alpaca_sym = symbol.replace("/", "")  # BTC/USD → BTCUSD for order
+            alpaca_sym = _alpaca_crypto_sym(symbol) if is_crypto else symbol
             ap = {p.symbol: p for p in client.get_all_positions()}
             key = alpaca_sym if is_crypto else symbol
 
@@ -344,7 +355,7 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
             from alpaca.trading.enums import OrderSide, TimeInForce
             from alpaca.trading.requests import MarketOrderRequest
 
-            alpaca_sym  = symbol.replace("/", "") if is_crypto else symbol
+            alpaca_sym  = _alpaca_crypto_sym(symbol) if is_crypto else symbol
             side        = OrderSide.BUY if direction == "long" else OrderSide.SELL
             usdc_pair   = _is_usdc_pair(symbol)
 
@@ -419,7 +430,7 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
 
     # ── 5. Held snapshot ─────────────────────────────────────────────────────
     for pos in get_open_pos(symbol, db_path):
-        alpaca_sym = symbol.replace("/", "") if is_crypto else symbol
+        alpaca_sym = _alpaca_crypto_sym(symbol) if is_crypto else symbol
         try:
             ap = {p.symbol: p for p in client.get_all_positions()}
             cur_price = float(ap[alpaca_sym].current_price) if alpaca_sym in ap else pos["entry_price"]
@@ -459,7 +470,7 @@ def check_profit_threshold(cfg: dict, db_path=_DEFAULT_DB) -> list[dict]:
         for pos in open_db_pos:
             sym        = pos["symbol"]
             is_crypto  = _is_crypto(sym)
-            alpaca_sym = sym.replace("/", "") if is_crypto else sym
+            alpaca_sym = _alpaca_crypto_sym(sym) if is_crypto else sym
 
             if alpaca_sym not in alpaca_map:
                 continue
@@ -491,7 +502,7 @@ def check_profit_threshold(cfg: dict, db_path=_DEFAULT_DB) -> list[dict]:
 def _close_all_for_symbol(symbol: str, client, db_path: Path, is_crypto: bool) -> list[dict]:
     """Close all open DB positions + Alpaca positions for this symbol.
     Returns list of {symbol, pnl, reason} for each closed position."""
-    alpaca_sym  = symbol.replace("/", "") if is_crypto else symbol
+    alpaca_sym  = _alpaca_crypto_sym(symbol) if is_crypto else symbol
     usdc_pair   = _is_usdc_pair(symbol)
     closed = []
     try:
