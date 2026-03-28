@@ -133,14 +133,20 @@ async def _sma_loop(app, chat_id: int) -> None:
                     # Per-trade entry notifications
                     for entry in result.entries:
                         msg = _format_entry(entry)
-                        await app.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+                        try:
+                            await app.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+                        except Exception as notify_err:
+                            logger.error("algo003: entry notify failed: %s", notify_err)
 
                     # Per-trade exit notifications
                     for exit_info in result.exits:
                         _reason_map = {"signal_switch": "Signal Switch", "sma_exit": "SMA Cross"}
                         reason = _reason_map.get(exit_info.get("reason", ""), "SMA Cross")
                         msg = _format_exit(exit_info, reason=reason)
-                        await app.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+                        try:
+                            await app.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+                        except Exception as notify_err:
+                            logger.error("algo003: exit notify failed: %s", notify_err)
 
                     all_exits.extend(result.exits)
 
