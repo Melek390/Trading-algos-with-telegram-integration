@@ -167,25 +167,29 @@ def _get_bars(symbol: str, timeframe: str, limit: int = 350) -> pd.DataFrame:
 
 
 def _get_signal(df: pd.DataFrame, sma_length: int):
-    """Compute SMA crossover signals on the dataframe. Returns (long, short, exit_long, exit_short)."""
+    """
+    State-based SMA signal — every cycle:
+      price > SMA → should be long
+      price < SMA → should be short
+    Entry fires whenever we're not already in the desired position (no missed-candle problem).
+    Returns (should_long, should_short, exit_long, exit_short, df).
+    """
     if df.empty or len(df) < sma_length + 5:
         return False, False, False, False, None
 
     df = df.copy()
     df["sma"] = df["close"].rolling(sma_length).mean()
 
-    i_curr, i_prev = -2, -3   # use last fully closed bar
-    close      = float(df["close"].iloc[i_curr])
-    sma        = float(df["sma"].iloc[i_curr])
-    prev_close = float(df["close"].iloc[i_prev])
-    prev_sma   = float(df["sma"].iloc[i_prev])
+    # Use the last fully closed bar (index -2) to avoid acting on an incomplete candle
+    close = float(df["close"].iloc[-2])
+    sma   = float(df["sma"].iloc[-2])
 
-    long_sig   = (close > sma) and (prev_close <= prev_sma)
-    short_sig  = (close < sma) and (prev_close >= prev_sma)
-    exit_long  = close < sma
-    exit_short = close > sma
+    should_long  = close > sma
+    should_short = close < sma
+    exit_long    = close < sma
+    exit_short   = close > sma
 
-    return long_sig, short_sig, exit_long, exit_short, df
+    return should_long, should_short, exit_long, exit_short, df
 
 
 # ── Position store (algo_003_positions) ────────────────────────────────────────
@@ -423,6 +427,7 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
             logger.error("algo003: entry failed for %s %s: %s", direction, symbol, e)
             result.entries.append({"symbol": symbol, "direction": direction, "error": str(e)})
 
+    # State-based: enter whenever we're not already in the desired position
     if long_sig and not has_long:
         if has_short:
             result.exits.extend(_close_all_for_symbol(symbol, client, db_path, is_crypto))
@@ -432,6 +437,10 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
         if has_long:
             result.exits.extend(_close_all_for_symbol(symbol, client, db_path, is_crypto))
         _enter("short")
+
+    # Crypto long-only: exit when price drops below SMA (no short allowed)
+    elif is_crypto and not short_sig and not has_long and not long_sig:
+        pass  # flat and no signal — do nothing
 
     # ── 5. Held snapshot ─────────────────────────────────────────────────────
     for pos in get_open_pos(symbol, db_path):
