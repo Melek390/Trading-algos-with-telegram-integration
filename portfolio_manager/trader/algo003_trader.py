@@ -66,46 +66,6 @@ def _alpaca_crypto_sym(symbol: str) -> str:
     return symbol                         # BTC/USDC, SOL/USDC, etc.
 
 
-def _buy_usdc_with_usd(client, notional: float):
-    """Step 1 for USDC pairs: convert USD → USDC before buying the pair."""
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    from alpaca.trading.requests import MarketOrderRequest
-    # USDC ≈ $1, so qty ≈ notional
-    qty = round(notional, 2)
-    logger.info("algo003: buying %.2f USDC with USD (pre-swap)", qty)
-    return client.submit_order(MarketOrderRequest(
-        symbol="USDCUSD",
-        qty=qty,
-        side=OrderSide.BUY,
-        time_in_force=TimeInForce.GTC,
-    ))
-
-
-def _sell_usdc_for_usd(client, usdc_qty: float):
-    """Step 2 after closing a USDC pair: convert USDC back → USD."""
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    from alpaca.trading.requests import MarketOrderRequest
-    qty = round(usdc_qty, 2)
-    if qty <= 0:
-        return
-    logger.info("algo003: selling %.2f USDC back to USD (post-swap)", qty)
-    try:
-        # Try to close full USDC/USD position first (catches rounding slippage)
-        all_pos = {p.symbol: p for p in client.get_all_positions()}
-        if "USDCUSD" in all_pos:
-            client.close_position("USDCUSD")
-            return
-    except Exception:
-        pass
-    try:
-        client.submit_order(MarketOrderRequest(
-            symbol="USDCUSD",
-            qty=qty,
-            side=OrderSide.SELL,
-            time_in_force=TimeInForce.GTC,
-        ))
-    except Exception as e:
-        logger.warning("algo003: USDC→USD swap failed: %s", e)
 
 
 def _get_bars(symbol: str, timeframe: str, limit: int = 350) -> pd.DataFrame:
@@ -329,11 +289,6 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
 
             if key in ap:
                 client.close_position(key)
-                # USDC pair: convert received USDC back to USD
-                if _is_usdc_pair(symbol):
-                    ep_usdc = float(ap[key].current_price)
-                    usdc_received = round(pos["shares"] * ep_usdc, 2)
-                    _sell_usdc_for_usd(client, usdc_received)
 
             ep   = float(ap[key].current_price) if key in ap else pos["entry_price"]
             pnl  = close_pos(pos["id"], ep, "sma_exit", db_path)
@@ -379,10 +334,6 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
                 raise ValueError(f"Could not get price for {symbol}")
 
             if is_crypto:
-                # Step 1 (USDC pairs only): swap USD → USDC before buying
-                if usdc_pair and direction == "long":
-                    _buy_usdc_with_usd(client, notional)
-
                 # Crypto supports fractional qty — round to 6 decimal places
                 qty = round(notional / price, 6)
                 if qty <= 0:
@@ -483,10 +434,6 @@ def check_profit_threshold(cfg: dict, db_path=_DEFAULT_DB) -> list[dict]:
             if unrealized >= threshold:
                 try:
                     client.close_position(alpaca_sym)
-                    # USDC pair: sell received USDC back to USD
-                    if _is_usdc_pair(sym):
-                        usdc_received = round(pos["shares"] * cur_price, 2)
-                        _sell_usdc_for_usd(client, usdc_received)
                     pnl = close_pos(pos["id"], cur_price, "profit_threshold", db_path)
                     closed.append({"symbol": sym, "pnl": pnl, "unrealized": unrealized})
                     logger.info("algo003: threshold hit %s unrealized=%.2f pnl=%.2f", sym, unrealized, pnl)
@@ -509,13 +456,6 @@ def _close_all_for_symbol(symbol: str, client, db_path: Path, is_crypto: bool) -
         ap = {p.symbol: p for p in client.get_all_positions()}
         if alpaca_sym in ap:
             client.close_position(alpaca_sym)
-            # USDC pair: sell received USDC back to USD
-            if usdc_pair:
-                for pos in get_open_pos(symbol, db_path):
-                    ep_usdc = float(ap[alpaca_sym].current_price)
-                    usdc_received = round(pos["shares"] * ep_usdc, 2)
-                    _sell_usdc_for_usd(client, usdc_received)
-                    break   # one swap covers all (same position block)
     except Exception:
         pass
     for pos in get_open_pos(symbol, db_path):
