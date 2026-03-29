@@ -488,12 +488,15 @@ def get_report_chart(algo_id: str, period: str = "monthly", db_path: Path = _DEF
         ax.set_xticks(visible_xs)
         ax.set_xticklabels(visible_labels, rotation=40, ha="right", fontsize=7, color="#cccccc")
 
-        ax.set_ylabel("Cumulative P&L %", fontsize=8, color="#cccccc")
+        pnl_unit = "$" if algo_id == "003" else "%"
+        ylabel   = f"Cumulative P&L {pnl_unit}"
+        ax.set_ylabel(ylabel, fontsize=8, color="#cccccc")
         ax.set_title(title, color="#eeeeee", fontsize=10, pad=8)
 
         # Annotate final value
+        final_label = f"${y_vals[-1]:+.2f}" if algo_id == "003" else f"{y_vals[-1]:+.2f}%"
         ax.annotate(
-            f"{y_vals[-1]:+.2f}%",
+            final_label,
             xy=(xs[-1], y_vals[-1]),
             xytext=(0, 10), textcoords="offset points",
             color=color, fontsize=9, ha="center", fontweight="bold",
