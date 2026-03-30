@@ -18,6 +18,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 import yfinance as yf
+
 from alpaca.trading.enums import QueryOrderStatus
 from alpaca.trading.requests import GetOrdersRequest
 
@@ -95,16 +96,47 @@ def passes_conditions(row: dict) -> bool:
     return sum(conditions) >= _MIN_CONDITIONS
 
 
-# ── Price helper ───────────────────────────────────────────────────────────────
+# ── Price / order helpers ──────────────────────────────────────────────────────
 
 def _fetch_price(sym: str) -> float | None:
-    """Best-effort yfinance price fetch (used when position is gone from Alpaca)."""
+    """Best-effort yfinance price fetch (fallback when Alpaca orders unavailable)."""
     try:
         price = yf.Ticker(sym).fast_info.last_price
         return float(price) if price else None
     except Exception as e:
         logger.warning("monitor: yfinance price fetch failed for %s: %s", sym, e)
         return None
+
+
+def _get_bracket_exit(alpaca_client, sym: str) -> tuple[float | None, str]:
+    """
+    Query Alpaca's recent closed orders for `sym` to find the actual bracket
+    fill price and order type (stop → stop_loss, limit → take_profit).
+
+    Returns (fill_price, exit_reason).  Falls back to (None, "bracket_exit").
+    """
+    try:
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+        orders = alpaca_client.get_orders(GetOrdersRequest(
+            status=QueryOrderStatus.CLOSED,
+            symbols=[sym],
+            limit=10,
+        ))
+        # Most recent filled sell order = the bracket leg that closed the position
+        for o in sorted(orders, key=lambda x: x.filled_at or "", reverse=True):
+            if o.side.value != "sell" or o.status.value != "filled":
+                continue
+            fill = float(o.filled_avg_price) if o.filled_avg_price else None
+            if o.type.value == "stop":
+                return fill, "stop_loss"
+            if o.type.value == "limit":
+                return fill, "take_profit"
+            if o.type.value in ("stop_limit", "market"):
+                return fill, "bracket_exit"
+    except Exception as e:
+        logger.warning("monitor: could not query bracket orders for %s: %s", sym, e)
+    return None, "bracket_exit"
 
 
 # ── Monitoring cycle ──────────────────────────────────────────────────────────
@@ -194,21 +226,15 @@ def run_monitoring_cycle(
                 logger.info("monitor: %s has a pending order, skipping exit check", sym)
                 continue
 
-            # Bracket was triggered — determine TP or SL
-            current_price = _fetch_price(sym)
+            # Query actual Alpaca bracket fill — avoids guessing from current price
+            current_price, exit_reason = _get_bracket_exit(alpaca_client, sym)
 
-            if current_price is not None:
-                if current_price >= entry_price * (1 + _TAKE_PROFIT_PCT):
-                    exit_reason = "take_profit"
-                elif current_price <= entry_price * (1 - _STOP_LOSS_PCT):
-                    exit_reason = "stop_loss"
-                else:
-                    exit_reason = "bracket_exit"
-            else:
-                exit_reason = "bracket_exit"
+            # Fallback to yfinance if Alpaca order query returned no price
+            if current_price is None:
+                current_price = _fetch_price(sym)
 
             logger.info(
-                "monitor: %s no longer in Alpaca positions → %s  price=%.2f",
+                "monitor: %s no longer in Alpaca positions → %s  fill_price=%.2f",
                 sym, exit_reason, current_price or 0,
             )
 
