@@ -35,7 +35,7 @@ async def execute_trade(algo_id: str):
 def _close_all_sync(algo_id: str) -> dict:
     """
     Close all open Alpaca positions for the given algo and mark them in the DB.
-    Returns {"closed": [symbols], "errors": [(symbol, reason)]}
+    Returns {"closed": [symbols], "errors": [(symbol, reason)], "market_closed": bool}
     """
     from portfolio_manager.client import get_trading_client
 
@@ -44,6 +44,15 @@ def _close_all_sync(algo_id: str) -> dict:
     client   = get_trading_client()
     closed   = []
     errors   = []
+
+    # Equity algos require the market to be open to submit market close orders
+    if algo_id in ("001", "002"):
+        try:
+            clock = client.get_clock()
+            if not clock.is_open:
+                return {"closed": [], "errors": [], "market_closed": True}
+        except Exception as e:
+            errors.append(("clock_check", str(e)))
 
     if algo_id == "001":
         positions = [p for p in client.get_all_positions() if p.symbol in _ALGO_001_SYMBOLS]
@@ -89,10 +98,13 @@ def _close_all_sync(algo_id: str) -> dict:
         except Exception as e:
             errors.append(("orders_fetch", str(e)))
 
-        for sym, db_pos in db_positions.items():
+        # Union of all symbols — Alpaca positions + any DB-only ghost positions
+        all_symbols = set(alpaca_map.keys()) | set(db_positions.keys())
+
+        for sym in all_symbols:
             sym_errors = []
 
-            # Step 1: cancel bracket orders — failure here must NOT abort the position close
+            # Step 1: cancel all open orders for this symbol
             orders_pending_cancel = False
             for o in [o for o in all_open_orders if o.symbol == sym]:
                 try:
@@ -100,30 +112,31 @@ def _close_all_sync(algo_id: str) -> dict:
                 except Exception as e:
                     err_str = str(e)
                     if "pending cancel" in err_str.lower():
-                        # Orders already being cancelled — skip close attempt,
-                        # Alpaca will release the qty once cancellation completes
                         orders_pending_cancel = True
                     else:
                         sym_errors.append(f"cancel order: {err_str}")
 
-            # Step 2: close Alpaca position — skip if orders are still pending cancel
-            # (qty is held by those orders; close will fail until they complete)
+            # Step 2: close Alpaca position with a market order
+            # Skip if orders are still pending cancel (qty is held until they complete)
             exit_price = float(alpaca_map[sym].current_price) if sym in alpaca_map else None
-            if not orders_pending_cancel:
+            if sym in alpaca_map and not orders_pending_cancel:
                 try:
-                    if sym in alpaca_map:
-                        client.close_position(sym)
+                    client.close_position(sym)
                 except Exception as e:
                     sym_errors.append(f"close position: {e}")
 
-            # Step 3: always mark DB closed regardless of Alpaca errors
-            try:
-                close_position(db_pos["id"], exit_price, "manual_close")
-                closed.append(sym)
-                if orders_pending_cancel:
-                    sym_errors.append("bracket orders still cancelling — Alpaca will self-close once done")
-            except Exception as e:
-                sym_errors.append(f"db update: {e}")
+            if orders_pending_cancel:
+                sym_errors.append("bracket orders still cancelling — Alpaca will self-close once done")
+
+            # Step 3: mark DB closed if a record exists
+            db_pos = db_positions.get(sym)
+            if db_pos:
+                try:
+                    close_position(db_pos["id"], exit_price, "manual_close")
+                except Exception as e:
+                    sym_errors.append(f"db update: {e}")
+
+            closed.append(sym)
 
             # One combined error entry per symbol (not one per step)
             if sym_errors:
