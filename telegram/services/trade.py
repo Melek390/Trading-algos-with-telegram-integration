@@ -77,30 +77,41 @@ def _close_all_sync(algo_id: str) -> dict:
                 errors.append((p.symbol, str(e)))
 
     elif algo_id == "002":
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
         from portfolio_manager.positions.position_store import close_position, get_open_positions
+
         db_positions = {p["symbol"]: p for p in get_open_positions()}
         alpaca_map   = {p.symbol: p for p in client.get_all_positions()}
+        all_open_orders = []
+        try:
+            all_open_orders = client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+        except Exception as e:
+            errors.append(("orders_fetch", str(e)))
 
-        # Close anything open in DB (includes pending orders)
         for sym, db_pos in db_positions.items():
-            try:
-                from alpaca.trading.requests import GetOrdersRequest
-                from alpaca.trading.enums import QueryOrderStatus
-                open_orders = [
-                    o for o in client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
-                    if o.symbol == sym
-                ]
-                for o in open_orders:
+            # Step 1: cancel bracket orders — failure here must NOT abort the position close
+            for o in [o for o in all_open_orders if o.symbol == sym]:
+                try:
                     client.cancel_order_by_id(o.id)
+                except Exception as e:
+                    errors.append((sym, f"cancel order {o.id[:8]}: {e}"))
+
+            # Step 2: close Alpaca position — independent of step 1
+            exit_price = None
+            try:
                 if sym in alpaca_map:
                     client.close_position(sym)
                     exit_price = float(alpaca_map[sym].current_price)
-                else:
-                    exit_price = None
+            except Exception as e:
+                errors.append((sym, f"close position: {e}"))
+
+            # Step 3: always mark DB closed regardless of Alpaca errors
+            try:
                 close_position(db_pos["id"], exit_price, "manual_close")
                 closed.append(sym)
             except Exception as e:
-                errors.append((sym, str(e)))
+                errors.append((sym, f"db update: {e}"))
 
     return {"closed": closed, "errors": errors}
 
