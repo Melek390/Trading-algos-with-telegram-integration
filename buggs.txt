@@ -1,0 +1,115 @@
+BUGS TO FIX ON MAIN BRANCH
+===========================
+
+[1] position_monitor.py — _MIN_CONDITIONS hardcoded separately from algo002.py (FIXED in backtesting)
+------------------------------------------------------------------------------------------------------
+Symptom : Lowering _MIN_CONDITIONS in algo002.py to 11 had no effect on entry filtering because
+          position_monitor.py passes_conditions() had its own hardcoded value of 12.
+Fix     : Both files must share a single source of truth (import constant from algo002.py).
+File    : portfolio_manager/positions/position_monitor.py → _MIN_CONDITIONS
+
+[2] ALGO_002 ghost positions — positions open in DB but gone from Alpaca
+-------------------------------------------------------------------------
+Symptom : Positions show as "open" in ALGO_002 report but NOT in portfolio.
+Cause   : run_monitoring_cycle() only runs during execute() (trade cycle). If a GTC order
+          was submitted and later cancelled externally (or never filled after hours),
+          the DB position stays open forever with no cleanup path.
+Fix     : run_monitoring_cycle() added to the daily positions update loop as a background
+          cleanup (PARTIAL FIX in backtesting). Full fix on main branch: also run on bot startup
+          and add a webhook/poll for order cancellation events.
+File    : telegram/services/scheduler.py → _positions_update_loop()
+
+[3] Pipeline scheduler — should only run when US market is open / just closed
+------------------------------------------------------------------------------
+Symptom : ALGO_001 and ALGO_002 pipelines are scheduled at fixed UTC times
+          regardless of whether the US market was open that day (e.g. holidays,
+          weekends). Pipelines may run with stale data or fail silently.
+Fix     : Before triggering the pipeline in scheduler.py, check Alpaca's clock
+          (get_clock().is_open or next_open/next_close) OR check if today is a
+          US trading day using a market-calendar library (e.g. pandas_market_calendars
+          or exchange_calendars). Skip the run on holidays/weekends.
+File    : telegram/services/scheduler.py  →  scheduled job callback
+
+[4] reporter.py — ALGO_003 chart shows % label instead of $ (FIXED in backtesting)
+------------------------------------------------------------------------------------
+Symptom : Weekly/monthly chart for ALGO_003 shows "Cumulative P&L %" on Y-axis and
+          annotates the final value with "%" even though ALGO_003 tracks dollar P&L.
+Fix     : Chart ylabel and final value annotation now check algo_id — "$" for ALGO_003,
+          "%" for all others.
+File    : portfolio_manager/reports/reporter.py → get_report_chart()
+
+[5] ALGO_002 position_monitor — wrong exit reason + exit price (FIXED in backtesting)
+--------------------------------------------------------------------------------------
+Symptom A: Positions closed by bracket show "bracket" exit reason instead of
+           "stop_loss" or "take_profit" (e.g. NAVN -0.57%, ANGO -0.73% labeled "bracket").
+Symptom B: Position closed well past SL (e.g. MPTI -3.53% vs expected -1%).
+           SL order did trigger but gapped down and filled lower (stop market = no price
+           guarantee). The monitor was comparing current yfinance price to entry price to
+           guess the reason — by the time it ran, price had moved, causing misclassification.
+Cause   : run_monitoring_cycle() guessed exit reason from yfinance CURRENT price instead
+          of reading the actual Alpaca bracket order fill price and order type.
+Fix     : Added _get_bracket_exit() which queries Alpaca closed orders for the symbol,
+          finds the most recent filled sell order, reads fill_avg_price + order type
+          (stop → stop_loss, limit → take_profit). Falls back to yfinance if unavailable.
+File    : portfolio_manager/positions/position_monitor.py → run_monitoring_cycle()
+
+[6] ALGO_002 Close All — multiple bugs fixed across several iterations (FIXED in backtesting)
+--------------------------------------------------------------------------------------------
+Original symptoms:
+  A) "No open positions found" even though ANGO/HTH were visible in Alpaca portfolio
+  B) Errors shown multiple times per symbol (one per step instead of combined)
+  C) UUID not subscriptable crash (o.id[:8] on a UUID object)
+  D) "pending cancel" error caused the entire position close to abort
+  E) Orphaned Alpaca positions (no DB record) were never closed by Close All
+  F) No market hours check — orders submitted when market was closed (rejected silently)
+
+Root causes and fixes applied:
+  Bug A (DB-only iteration):
+    Old code iterated `db_positions.items()` — only positions tracked in the DB.
+    If DB was cleared manually or a position was never recorded, Close All was blind to it.
+    Fix: now iterates union of alpaca_map.keys() | db_positions.keys() — closes ALL Alpaca
+    positions regardless of whether a DB record exists.
+
+  Bug B (duplicate errors):
+    Each step (cancel, close, DB) appended to errors independently → same symbol appeared
+    multiple times in the error list.
+    Fix: collect all step errors into sym_errors list per symbol, join with " | ", append once.
+
+  Bug C (UUID crash):
+    o.id is a UUID object in the Alpaca SDK — slicing o.id[:8] raised TypeError.
+    Fix: str(o.id)[:8] wherever order IDs are displayed.
+
+  Bug D (pending_cancel aborts close):
+    cancel_order_by_id() raises if order is already in "pending_cancel" state.
+    Old code: one try/except wrapped cancel + close + DB update → cancel failure aborted all.
+    Fix: 3 independent try/except blocks. If cancel fails with "pending cancel", set
+    orders_pending_cancel=True and SKIP close_position() (Alpaca holds qty until cancel
+    completes — close would fail with "insufficient qty"). DB is always updated.
+
+  Bug E (orphaned positions):
+    Alpaca positions with no matching DB record (e.g. entered via API, DB was reset) were
+    invisible to Close All. "No open positions found" was shown even though Alpaca held them.
+    Fix: iterate all Alpaca positions first (see Bug A fix above).
+
+  Bug F (no market hours check):
+    Submitting a close order when market is closed would fail silently or error.
+    Fix: _close_all_sync() calls client.get_clock().is_open for equity algos (001/002).
+    If market is closed, returns {"market_closed": True} immediately — no orders submitted.
+    Bot displays: "🕐 Market is closed. Positions can only be closed during trading hours."
+    Crypto (ALGO_003) is 24/7 — no clock check needed there.
+
+How Close All works now (algo_002):
+  1. get_clock().is_open → if False, abort with market_closed message
+  2. Fetch all Alpaca positions + all open orders + all DB open records
+  3. For each symbol in (Alpaca positions ∪ DB positions):
+       a. Cancel all open orders for that symbol
+          → if "pending cancel" error: skip Alpaca close (Alpaca will auto-close when done)
+       b. Close Alpaca position with market order (skipped if pending_cancel)
+       c. Mark DB record closed at current price with reason "manual_close" (if record exists)
+       d. Append symbol to `closed` list regardless
+  4. Display: ✅ Closed (N): SYM1  SYM2  ...
+              ❌ Errors: sym: reason (only if any step failed)
+              "No open positions found" only if both Alpaca AND DB had zero open records
+
+Files   : telegram/services/trade.py → _close_all_sync()
+          telegram/handlers/callbacks.py → close_all_confirm handler
