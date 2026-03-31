@@ -90,28 +90,44 @@ def _close_all_sync(algo_id: str) -> dict:
             errors.append(("orders_fetch", str(e)))
 
         for sym, db_pos in db_positions.items():
+            sym_errors = []
+
             # Step 1: cancel bracket orders — failure here must NOT abort the position close
+            orders_pending_cancel = False
             for o in [o for o in all_open_orders if o.symbol == sym]:
                 try:
                     client.cancel_order_by_id(o.id)
                 except Exception as e:
-                    errors.append((sym, f"cancel order {str(o.id)[:8]}: {e}"))
+                    err_str = str(e)
+                    if "pending cancel" in err_str.lower():
+                        # Orders already being cancelled — skip close attempt,
+                        # Alpaca will release the qty once cancellation completes
+                        orders_pending_cancel = True
+                    else:
+                        sym_errors.append(f"cancel order: {err_str}")
 
-            # Step 2: close Alpaca position — independent of step 1
-            exit_price = None
-            try:
-                if sym in alpaca_map:
-                    client.close_position(sym)
-                    exit_price = float(alpaca_map[sym].current_price)
-            except Exception as e:
-                errors.append((sym, f"close position: {e}"))
+            # Step 2: close Alpaca position — skip if orders are still pending cancel
+            # (qty is held by those orders; close will fail until they complete)
+            exit_price = float(alpaca_map[sym].current_price) if sym in alpaca_map else None
+            if not orders_pending_cancel:
+                try:
+                    if sym in alpaca_map:
+                        client.close_position(sym)
+                except Exception as e:
+                    sym_errors.append(f"close position: {e}")
 
             # Step 3: always mark DB closed regardless of Alpaca errors
             try:
                 close_position(db_pos["id"], exit_price, "manual_close")
                 closed.append(sym)
+                if orders_pending_cancel:
+                    sym_errors.append("bracket orders still cancelling — Alpaca will self-close once done")
             except Exception as e:
-                errors.append((sym, f"db update: {e}"))
+                sym_errors.append(f"db update: {e}")
+
+            # One combined error entry per symbol (not one per step)
+            if sym_errors:
+                errors.append((sym, " | ".join(sym_errors)))
 
     return {"closed": closed, "errors": errors}
 
