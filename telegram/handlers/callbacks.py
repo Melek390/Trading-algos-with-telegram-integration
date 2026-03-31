@@ -396,19 +396,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         try:
             result = await close_all_positions(algo_id)
-            closed = result["closed"]
-            errors = result["errors"]
 
-            lines = [f"*{safe_name} — Close All*\n"]
-            if closed:
-                lines.append(f"✅ *Closed ({len(closed)}):* " + "  ".join(f"`{s}`" for s in closed))
-            elif not errors:
-                lines.append("_No open positions found._")
-            if errors:
-                lines.append(f"❌ *Errors:*")
-                for sym, reason in errors:
-                    lines.append(f"• `{sym}`: {reason}")
-            msg = "\n".join(lines)
+            if result.get("market_closed"):
+                msg = (
+                    f"*{safe_name} — Close All*\n\n"
+                    "🕐 *Market is closed.*\n"
+                    "_Positions can only be closed during trading hours._"
+                )
+            else:
+                closed = result["closed"]
+                errors = result["errors"]
+
+                lines = [f"*{safe_name} — Close All*\n"]
+                if closed:
+                    lines.append(f"✅ *Closed ({len(closed)}):* " + "  ".join(f"`{s}`" for s in closed))
+                elif not errors:
+                    lines.append("_No open positions found._")
+                if errors:
+                    lines.append(f"❌ *Errors:*")
+                    for sym, reason in errors:
+                        lines.append(f"• `{sym}`: {reason}")
+                msg = "\n".join(lines)
         except Exception as e:
             msg = f"❌ *Close all failed:*\n`{e}`"
 
