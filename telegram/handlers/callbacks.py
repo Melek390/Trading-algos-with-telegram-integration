@@ -402,7 +402,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             lines = [f"*{safe_name} — Close All*\n"]
             if closed:
                 lines.append(f"✅ *Closed ({len(closed)}):* " + "  ".join(f"`{s}`" for s in closed))
-            else:
+            elif not errors:
                 lines.append("_No open positions found._")
             if errors:
                 lines.append(f"❌ *Errors:*")
