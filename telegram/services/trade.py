@@ -95,7 +95,7 @@ def _close_all_sync(algo_id: str) -> dict:
                 try:
                     client.cancel_order_by_id(o.id)
                 except Exception as e:
-                    errors.append((sym, f"cancel order {o.id[:8]}: {e}"))
+                    errors.append((sym, f"cancel order {str(o.id)[:8]}: {e}"))
 
             # Step 2: close Alpaca position — independent of step 1
             exit_price = None
