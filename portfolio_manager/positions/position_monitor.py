@@ -17,8 +17,6 @@ import logging
 from datetime import date, datetime
 from pathlib import Path
 
-import yfinance as yf
-
 from alpaca.trading.enums import QueryOrderStatus
 from alpaca.trading.requests import GetOrdersRequest
 
@@ -98,40 +96,42 @@ def passes_conditions(row: dict) -> bool:
 
 # ── Price / order helpers ──────────────────────────────────────────────────────
 
-def _fetch_price(sym: str) -> float | None:
-    """Best-effort yfinance price fetch (fallback when Alpaca orders unavailable)."""
-    try:
-        price = yf.Ticker(sym).fast_info.last_price
-        return float(price) if price else None
-    except Exception as e:
-        logger.warning("monitor: yfinance price fetch failed for %s: %s", sym, e)
-        return None
-
-
-def _get_bracket_exit(alpaca_client, sym: str) -> tuple[float | None, str]:
+def _get_bracket_exit(
+    alpaca_client,
+    sym: str,
+    entry_date: date,
+) -> tuple[float | None, str]:
     """
-    Query Alpaca's recent closed orders for `sym` to find the actual bracket
-    fill price and order type (stop → stop_loss, limit → take_profit).
+    Query Alpaca closed orders for `sym` to find the actual bracket fill price.
 
-    Returns (fill_price, exit_reason).  Falls back to (None, "bracket_exit").
+    Filters to sell orders filled ON OR AFTER `entry_date` to avoid matching
+    stale cancelled/filled orders from previous positions in the same symbol.
+
+    Returns (fill_price, exit_reason). Returns (None, "bracket_exit") only if
+    Alpaca returns no matching filled sell order — never falls back to yfinance.
     """
     try:
-        from alpaca.trading.enums import QueryOrderStatus
-        from alpaca.trading.requests import GetOrdersRequest
         orders = alpaca_client.get_orders(GetOrdersRequest(
             status=QueryOrderStatus.CLOSED,
             symbols=[sym],
-            limit=10,
+            limit=20,
         ))
-        # Most recent filled sell order = the bracket leg that closed the position
-        for o in sorted(orders, key=lambda x: x.filled_at or "", reverse=True):
-            if o.side.value != "sell" or o.status.value != "filled":
-                continue
+        # Keep only filled sell orders that filled on/after our entry date
+        candidates = [
+            o for o in orders
+            if (o.side.value == "sell"
+                and o.status.value == "filled"
+                and o.filled_at is not None
+                and o.filled_at.date() >= entry_date)
+        ]
+        # Most recent fill = the bracket leg that actually closed this position
+        candidates.sort(key=lambda x: x.filled_at, reverse=True)
+        for o in candidates:
             fill = float(o.filled_avg_price) if o.filled_avg_price else None
-            if o.type.value == "stop":
-                return fill, "stop_loss"
             if o.type.value == "limit":
                 return fill, "take_profit"
+            if o.type.value == "stop":
+                return fill, "stop_loss"
             if o.type.value in ("stop_limit", "market"):
                 return fill, "bracket_exit"
     except Exception as e:
@@ -226,16 +226,13 @@ def run_monitoring_cycle(
                 logger.info("monitor: %s has a pending order, skipping exit check", sym)
                 continue
 
-            # Query actual Alpaca bracket fill — avoids guessing from current price
-            current_price, exit_reason = _get_bracket_exit(alpaca_client, sym)
-
-            # Fallback to yfinance if Alpaca order query returned no price
-            if current_price is None:
-                current_price = _fetch_price(sym)
+            # Query actual Alpaca bracket fill filtered to orders after our entry date
+            # No yfinance fallback — only Alpaca fill data is written to DB
+            current_price, exit_reason = _get_bracket_exit(alpaca_client, sym, entry_date)
 
             logger.info(
-                "monitor: %s no longer in Alpaca positions → %s  fill_price=%.2f",
-                sym, exit_reason, current_price or 0,
+                "monitor: %s no longer in Alpaca positions → %s  fill_price=%s",
+                sym, exit_reason, f"{current_price:.2f}" if current_price else "None",
             )
 
         # Record close in DB

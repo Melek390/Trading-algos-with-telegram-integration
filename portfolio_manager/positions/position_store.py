@@ -273,6 +273,29 @@ def close_position(
         )
 
 
+def update_entry_price_002(
+    order_id:    str,
+    fill_price:  float,
+    db_path:     Path = _DEFAULT_DB,
+) -> None:
+    """
+    Update the entry_price of an open ALGO_002 position to the actual Alpaca
+    fill price once the buy order is confirmed filled.
+
+    Called by the TradingStream on_trade_update when a buy fill event arrives.
+    """
+    init_table_002(db_path)
+    with _conn(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE algo_002_positions
+               SET entry_price = ?
+             WHERE order_id = ? AND status = 'open'
+            """,
+            (fill_price, order_id),
+        )
+
+
 def get_open_positions(db_path: Path = _DEFAULT_DB) -> list[dict]:
     """Return all currently open ALGO_002 positions ordered by entry date."""
     init_table_002(db_path)
