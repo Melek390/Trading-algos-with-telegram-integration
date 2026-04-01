@@ -591,6 +591,85 @@ def start_performance_checker(app) -> None:
     )
 
 
+# ── Hourly DB ↔ Alpaca sync (silent background safety net) ──────────────────────
+
+_DB_SYNC_INTERVAL_SECS = 3600   # run every 60 minutes
+
+
+async def _db_sync_loop() -> None:
+    """
+    Silently sync DB open positions against live Alpaca state every hour.
+
+    ALGO_002: calls run_monitoring_cycle — detects bracket exits that the
+              TradingStream may have missed (bot restart, reconnect gap).
+    ALGO_001: compares DB open position against Alpaca SPY/VXUS/SHY holdings;
+              marks DB closed if the symbol is no longer held on Alpaca.
+
+    No Telegram notification is sent here — the TradingStream handles real-time
+    alerts. This loop is purely a data-integrity safety net.
+    """
+    try:
+        while True:
+            await asyncio.sleep(_DB_SYNC_INTERVAL_SECS)
+            logger.info("DB sync: starting hourly Alpaca ↔ DB reconciliation")
+
+            try:
+                from portfolio_manager.client import get_trading_client
+                loop   = asyncio.get_event_loop()
+                client = get_trading_client()
+
+                # ── ALGO_002: run full monitoring cycle ─────────────────────────
+                from portfolio_manager.positions.position_monitor import run_monitoring_cycle
+                closed = await loop.run_in_executor(
+                    None, run_monitoring_cycle, client, None
+                )
+                if closed:
+                    logger.info(
+                        "DB sync: ALGO_002 closed %d position(s): %s",
+                        len(closed), [c["symbol"] for c in closed],
+                    )
+
+                # ── ALGO_001: compare DB vs Alpaca ──────────────────────────────
+                from portfolio_manager.positions.position_store import (
+                    get_current_position_001, close_position_001,
+                )
+                db_pos = await loop.run_in_executor(None, get_current_position_001)
+                if db_pos:
+                    alpaca_syms = {
+                        p.symbol for p in await loop.run_in_executor(
+                            None, client.get_all_positions
+                        )
+                    }
+                    sym = db_pos["symbol"]
+                    if sym not in alpaca_syms:
+                        logger.info(
+                            "DB sync: ALGO_001 %s in DB but not on Alpaca — marking closed", sym
+                        )
+                        await loop.run_in_executor(
+                            None, close_position_001,
+                            db_pos["id"], None, "sync_close",
+                        )
+
+                logger.info("DB sync: reconciliation complete")
+
+            except Exception as e:
+                logger.warning("DB sync: reconciliation error: %s", e)
+
+    except asyncio.CancelledError:
+        logger.info("DB sync loop cancelled")
+
+
+def start_db_sync(app) -> None:
+    """Start the hourly DB ↔ Alpaca sync task (once per bot lifetime)."""
+    key = "_db_sync_task"
+    existing = app.bot_data.get(key)
+    if existing and not existing.done():
+        return
+    task = asyncio.create_task(_db_sync_loop())
+    app.bot_data[key] = task
+    logger.info("Hourly DB ↔ Alpaca sync started (every %d min)", _DB_SYNC_INTERVAL_SECS // 60)
+
+
 def _seconds_until_next(hour: int, minute: int, weekday: int | None = None) -> float:
     """
     Seconds until the next occurrence of hour:minute UTC.
