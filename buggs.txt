@@ -113,3 +113,15 @@ How Close All works now (algo_002):
 
 Files   : telegram/services/trade.py → _close_all_sync()
           telegram/handlers/callbacks.py → close_all_confirm handler
+
+[7] All Algos — Telegram report shows full position history (too long) (FIXED in backtesting)
+----------------------------------------------------------------------------------------------
+Symptom : The report message displayed every closed position in the selected period.
+          For monthly/yearly reports with many trades this floods the chat.
+Cause   : get_report() passed the full `closed` list directly to _closed_block() with no limit.
+Fix     : Slice to latest 5 positions for the Telegram display only.
+          Stats block (win rate, avg PnL, total) still computed on the full period dataset.
+          If more than 5 positions exist, a footer is shown:
+            "…and N more — see CSV for full history."
+          CSV export and chart are completely unchanged — full history preserved.
+File    : portfolio_manager/reports/reporter.py → get_report()
