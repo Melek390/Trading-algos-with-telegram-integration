@@ -143,6 +143,10 @@ def execute(db_path: Path = _DEFAULT_DB) -> MultiTradeResult:
                         )
                     tp_price = round(last_price * (1 + _TAKE_PROFIT_PCT), 2)
                     sl_price = round(last_price * (1 - _STOP_LOSS_PCT),   2)
+                    # Alpaca requires takeprofit.limitprice >= baseprice + 0.01
+                    # Rounding can violate this for cheap/penny stocks
+                    if tp_price < last_price + 0.01:
+                        tp_price = round(last_price + 0.01, 2)
 
                     order = client.submit_order(
                         MarketOrderRequest(
