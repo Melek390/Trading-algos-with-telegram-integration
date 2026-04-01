@@ -142,3 +142,32 @@ Fix     : After calculating tp_price, clamp it up if too close:
 Note    : ALEX error ("asset not active") in the same screenshot is NOT a bug —
           ALEX is simply not listed as a tradeable asset on Alpaca paper trading.
 File    : portfolio_manager/trader/algo002_trader.py → _enter() / bracket order block
+
+[9] ALGO_002 — Wrong exit price/reason recorded in DB for bracket TP/SL (FIXED in backtesting)
+-----------------------------------------------------------------------------------------------
+Symptom : HTH closed with exit_price=$36.07 and reason="bracket_exit" in DB, but Alpaca
+          shows the actual TP fill was $36.26 with type="limit" → should be "take_profit".
+          PnL written as +1.46% instead of actual +1.94%.
+
+Cause A : _get_bracket_exit() queried last 10 closed orders for the symbol with no date filter.
+          A symbol traded multiple times (e.g. HTH had 2 separate entries) meant stale cancelled/
+          filled orders from a previous entry were matched first, returning the wrong fill price.
+Fix A   : Added `entry_date` parameter to _get_bracket_exit(). Filters to sell orders where
+          filled_at.date() >= entry_date — only orders that could belong to the current position.
+
+Cause B : _get_bracket_exit() fell back to yfinance current price if no Alpaca order matched.
+          yfinance returns market price at query time, not the actual bracket fill — completely wrong.
+Fix B   : Removed yfinance fallback entirely. If no Alpaca fill order is found, record None.
+          DB will show exit_price=None / pnl=None rather than a fabricated price.
+
+Cause C : entry_price stored in DB was from yfinance fast_info.last_price at order submission
+          time, not the actual Alpaca fill price. Slight drift caused incorrect PnL calculation.
+Fix C   : _get_last_price() in algo002_trader now uses Alpaca StockHistoricalDataClient
+          get_stock_latest_trade() instead of yfinance. Additionally, the TradingStream
+          on_trade_update handler now intercepts buy fill events and calls
+          update_entry_price_002(order_id, fill_price) to overwrite with the exact Alpaca fill.
+
+Files   : portfolio_manager/positions/position_monitor.py → _get_bracket_exit(), run_monitoring_cycle()
+          portfolio_manager/trader/algo002_trader.py → _get_last_price()
+          portfolio_manager/positions/position_store.py → update_entry_price_002() (new)
+          telegram/services/trade_stream.py → on_trade_update() buy fill handler

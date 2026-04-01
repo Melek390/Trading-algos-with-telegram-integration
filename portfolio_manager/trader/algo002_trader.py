@@ -16,8 +16,6 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
-import yfinance as yf
-
 _PROJECT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT))
 
@@ -26,7 +24,7 @@ from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakePro
 
 from algos.algo002 import _load_latest, get_signal
 from portfolio_manager.capital_manager import get_algo_capital
-from portfolio_manager.client import get_trading_client
+from portfolio_manager.client import get_trading_client, get_client
 from portfolio_manager.positions.position_monitor import (
     passes_conditions,
     run_monitoring_cycle,
@@ -56,12 +54,14 @@ class MultiTradeResult:
 
 
 def _get_last_price(sym: str) -> float | None:
-    """Fetch the latest price for a symbol via yfinance fast_info."""
+    """Fetch the latest trade price for a symbol from Alpaca (no yfinance)."""
     try:
-        price = yf.Ticker(sym).fast_info.last_price
+        from alpaca.data.requests import StockLatestTradeRequest
+        trades = get_client().get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=[sym]))
+        price = trades[sym].price
         return float(price) if price else None
     except Exception as e:
-        logger.warning("algo002: could not fetch price for %s: %s", sym, e)
+        logger.warning("algo002: could not fetch Alpaca price for %s: %s", sym, e)
         return None
 
 

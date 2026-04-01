@@ -81,14 +81,32 @@ def start_trade_stream(app) -> None:
     @stream.subscribe_trade_updates
     async def on_trade_update(data):
         try:
-            order  = data.order
-            event  = getattr(data, "event", "")
-            symbol = getattr(order, "symbol", None)
-            side   = order.side.value if hasattr(order.side, "value") else str(order.side)
-            otype  = order.type.value if hasattr(order.type, "value") else str(order.type)
+            order      = data.order
+            event      = getattr(data, "event", "")
+            symbol     = getattr(order, "symbol", None)
+            side       = order.side.value if hasattr(order.side, "value") else str(order.side)
+            otype      = order.type.value if hasattr(order.type, "value") else str(order.type)
+            order_id   = str(order.id) if order.id else None
+            fill_price = float(order.filled_avg_price) if order.filled_avg_price else None
 
-            # Only care about filled sell orders (bracket legs closing a position)
-            if event != "fill" or side != "sell":
+            if event != "fill":
+                return
+
+            # ── BUY fill: update DB entry_price to actual Alpaca fill ──────────
+            if side == "buy" and fill_price and order_id:
+                try:
+                    from portfolio_manager.positions.position_store import update_entry_price_002
+                    update_entry_price_002(order_id, fill_price)
+                    logger.info(
+                        "trade_stream: %s buy fill — updated entry_price to %.4f",
+                        symbol, fill_price,
+                    )
+                except Exception as e:
+                    logger.warning("trade_stream: could not update entry_price for %s: %s", symbol, e)
+                return
+
+            # ── SELL fill: bracket TP or SL closed the position ───────────────
+            if side != "sell":
                 return
 
             if otype == "limit":
