@@ -125,3 +125,20 @@ Fix     : Slice to latest 5 positions for the Telegram display only.
             "…and N more — see CSV for full history."
           CSV export and chart are completely unchanged — full history preserved.
 File    : portfolio_manager/reports/reporter.py → get_report()
+
+[8] ALGO_002 — Bracket TP rejected for penny stocks (FIXED in backtesting)
+---------------------------------------------------------------------------
+Symptom : Entry fails with Alpaca error:
+            "takeprofit.limitprice must be >= baseprice + 0.01"
+          Seen on PRPL at $0.6905 — stock enters candidate list but order is rejected.
+Cause   : tp_price = round(last_price * 1.02, 2)
+          For cheap stocks, rounding to 2 decimals produces a TP that is less than
+          $0.01 above the entry price, violating Alpaca's minimum bracket spread.
+          Example: round(0.6905 * 1.02, 2) = $0.70 → spread = $0.0095 < $0.01 required.
+Fix     : After calculating tp_price, clamp it up if too close:
+            if tp_price < last_price + 0.01:
+                tp_price = round(last_price + 0.01, 2)
+          This satisfies Alpaca's minimum while keeping the normal 2% TP for all other stocks.
+Note    : ALEX error ("asset not active") in the same screenshot is NOT a bug —
+          ALEX is simply not listed as a tradeable asset on Alpaca paper trading.
+File    : portfolio_manager/trader/algo002_trader.py → _enter() / bracket order block
