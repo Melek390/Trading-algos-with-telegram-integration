@@ -310,8 +310,11 @@ def get_report(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> str:
     if closed:
         parts += _stats_block(closed, algo_id) + [""]
 
-    # Closed positions
-    parts += _closed_block(closed, algo_id)
+    # Closed positions — show only latest 5 in Telegram; CSV has full history
+    display_closed = closed[:5]
+    parts += _closed_block(display_closed, algo_id)
+    if len(closed) > 5:
+        parts.append(f"_…and {len(closed) - 5} more — see CSV for full history._")
 
     # Open positions
     parts += [""]
