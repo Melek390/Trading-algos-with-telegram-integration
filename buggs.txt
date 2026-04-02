@@ -200,3 +200,23 @@ Files   : portfolio_manager/positions/position_monitor.py -> _get_bracket_exit()
           telegram/services/scheduler.py -> removed _db_sync_loop / start_db_sync,
             removed silent monitoring call from _positions_update_loop
           telegram/bot.py -> removed start_db_sync call
+
+[10] Reporter open positions - prices from yfinance instead of Alpaca (FIXED in backtesting)
+---------------------------------------------------------------------------------------------
+Symptom : Portfolio Status shows GBX at -1.68% (red) but ALGO_002 weekly report shows
+          GBX at +0.27% (green). Complete mismatch between the two screens.
+Cause   : _open_block() in reporter.py called _current_price(sym) which used
+          yf.Ticker(sym).fast_info.last_price for stocks -- a delayed, different data source.
+          entry_price was also taken from the DB (provisional estimate) not Alpaca avg_entry_price.
+          Result: reporter computed its own P&L from stale yfinance prices, always diverging
+          from what Alpaca (and Portfolio Status) shows.
+Fix     : Added _alpaca_positions_map() -- fetches all open positions from Alpaca once.
+          _open_block() now reads directly from Alpaca position object:
+            avg_entry_price -> entry price
+            current_price   -> current price
+            unrealized_plpc -> P&L % (Alpaca's own calculation)
+          If symbol not found on Alpaca, shows DB entry price with N/A -- no fabricated prices.
+          CSV export open positions section fixed the same way.
+          Reporter open positions now show identical numbers to Portfolio Status.
+Files   : portfolio_manager/reports/reporter.py -> _open_block(), _alpaca_positions_map() (new),
+            get_report(), get_report_csv()
