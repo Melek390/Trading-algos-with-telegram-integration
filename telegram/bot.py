@@ -50,7 +50,7 @@ from handlers.ticker_info import build_ticker_info_handler
 from handlers.callbacks import handle_callback
 from handlers.commands import cmd_start
 from handlers.algo003 import handle_algo003_text
-from services.scheduler import load_scheduler_states, start_scheduler, start_watchlist_checker, start_positions_updater, start_performance_checker, start_db_sync
+from services.scheduler import load_scheduler_states, start_scheduler, start_watchlist_checker, start_positions_updater, start_performance_checker
 from services.trade_stream import start_trade_stream
 
 load_dotenv()
@@ -81,7 +81,6 @@ async def _post_init(app) -> None:
     start_watchlist_checker(app)
     start_positions_updater(app)
     start_performance_checker(app)
-    start_db_sync(app)
     start_trade_stream(app)
     asyncio.create_task(_refresh_stale_earnings(app))
 

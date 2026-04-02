@@ -252,10 +252,12 @@ def close_position(
     """
     init_table_002(db_path)
     with _conn(db_path) as conn:
+        # Only update if still open — prevents race between TradingStream and
+        # monitoring cycle from overwriting whichever wrote first with correct data
         row = conn.execute(
-            "SELECT entry_price FROM algo_002_positions WHERE id = ?", (row_id,)
+            "SELECT entry_price, status FROM algo_002_positions WHERE id = ?", (row_id,)
         ).fetchone()
-        if not row:
+        if not row or row["status"] != "open":
             return
         pnl_pct = None
         if exit_price is not None and row["entry_price"]:
