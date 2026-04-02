@@ -1,25 +1,24 @@
 BUGS TO FIX ON MAIN BRANCH
 ===========================
 
-[1] position_monitor.py — _MIN_CONDITIONS hardcoded separately from algo002.py (FIXED in backtesting)
+[1] position_monitor.py - _MIN_CONDITIONS hardcoded separately from algo002.py (FIXED in backtesting)
 ------------------------------------------------------------------------------------------------------
 Symptom : Lowering _MIN_CONDITIONS in algo002.py to 11 had no effect on entry filtering because
           position_monitor.py passes_conditions() had its own hardcoded value of 12.
 Fix     : Both files must share a single source of truth (import constant from algo002.py).
-File    : portfolio_manager/positions/position_monitor.py → _MIN_CONDITIONS
+File    : portfolio_manager/positions/position_monitor.py -> _MIN_CONDITIONS
 
-[2] ALGO_002 ghost positions — positions open in DB but gone from Alpaca
+[2] ALGO_002 ghost positions - positions open in DB but gone from Alpaca
 -------------------------------------------------------------------------
 Symptom : Positions show as "open" in ALGO_002 report but NOT in portfolio.
 Cause   : run_monitoring_cycle() only runs during execute() (trade cycle). If a GTC order
           was submitted and later cancelled externally (or never filled after hours),
           the DB position stays open forever with no cleanup path.
-Fix     : run_monitoring_cycle() added to the daily positions update loop as a background
-          cleanup (PARTIAL FIX in backtesting). Full fix on main branch: also run on bot startup
-          and add a webhook/poll for order cancellation events.
-File    : telegram/services/scheduler.py → _positions_update_loop()
+Fix     : run_monitoring_cycle() is called at each ALGO_002 trade cycle to detect exits.
+          TradingStream (trade_stream.py) handles real-time bracket exits via WebSocket.
+File    : telegram/services/trade_stream.py, portfolio_manager/positions/position_monitor.py
 
-[3] Pipeline scheduler — should only run when US market is open / just closed
+[3] Pipeline scheduler - should only run when US market is open / just closed
 ------------------------------------------------------------------------------
 Symptom : ALGO_001 and ALGO_002 pipelines are scheduled at fixed UTC times
           regardless of whether the US market was open that day (e.g. holidays,
@@ -28,63 +27,63 @@ Fix     : Before triggering the pipeline in scheduler.py, check Alpaca's clock
           (get_clock().is_open or next_open/next_close) OR check if today is a
           US trading day using a market-calendar library (e.g. pandas_market_calendars
           or exchange_calendars). Skip the run on holidays/weekends.
-File    : telegram/services/scheduler.py  →  scheduled job callback
+File    : telegram/services/scheduler.py -> scheduled job callback
 
-[4] reporter.py — ALGO_003 chart shows % label instead of $ (FIXED in backtesting)
+[4] reporter.py - ALGO_003 chart shows % label instead of $ (FIXED in backtesting)
 ------------------------------------------------------------------------------------
 Symptom : Weekly/monthly chart for ALGO_003 shows "Cumulative P&L %" on Y-axis and
           annotates the final value with "%" even though ALGO_003 tracks dollar P&L.
-Fix     : Chart ylabel and final value annotation now check algo_id — "$" for ALGO_003,
+Fix     : Chart ylabel and final value annotation now check algo_id - "$" for ALGO_003,
           "%" for all others.
-File    : portfolio_manager/reports/reporter.py → get_report_chart()
+File    : portfolio_manager/reports/reporter.py -> get_report_chart()
 
-[5] ALGO_002 position_monitor — wrong exit reason + exit price (FIXED in backtesting)
+[5] ALGO_002 position_monitor - wrong exit reason + exit price (FIXED in backtesting)
 --------------------------------------------------------------------------------------
 Symptom A: Positions closed by bracket show "bracket" exit reason instead of
            "stop_loss" or "take_profit" (e.g. NAVN -0.57%, ANGO -0.73% labeled "bracket").
 Symptom B: Position closed well past SL (e.g. MPTI -3.53% vs expected -1%).
            SL order did trigger but gapped down and filled lower (stop market = no price
            guarantee). The monitor was comparing current yfinance price to entry price to
-           guess the reason — by the time it ran, price had moved, causing misclassification.
+           guess the reason -- by the time it ran, price had moved, causing misclassification.
 Cause   : run_monitoring_cycle() guessed exit reason from yfinance CURRENT price instead
           of reading the actual Alpaca bracket order fill price and order type.
 Fix     : Added _get_bracket_exit() which queries Alpaca closed orders for the symbol,
           finds the most recent filled sell order, reads fill_avg_price + order type
-          (stop → stop_loss, limit → take_profit). Falls back to yfinance if unavailable.
-File    : portfolio_manager/positions/position_monitor.py → run_monitoring_cycle()
+          (stop -> stop_loss, limit -> take_profit). Falls back to yfinance if unavailable.
+File    : portfolio_manager/positions/position_monitor.py -> run_monitoring_cycle()
 
-[6] ALGO_002 Close All — multiple bugs fixed across several iterations (FIXED in backtesting)
---------------------------------------------------------------------------------------------
+[6] ALGO_002 Close All - multiple bugs fixed across several iterations (FIXED in backtesting)
+---------------------------------------------------------------------------------------------
 Original symptoms:
   A) "No open positions found" even though ANGO/HTH were visible in Alpaca portfolio
   B) Errors shown multiple times per symbol (one per step instead of combined)
   C) UUID not subscriptable crash (o.id[:8] on a UUID object)
   D) "pending cancel" error caused the entire position close to abort
   E) Orphaned Alpaca positions (no DB record) were never closed by Close All
-  F) No market hours check — orders submitted when market was closed (rejected silently)
+  F) No market hours check -- orders submitted when market was closed (rejected silently)
 
 Root causes and fixes applied:
   Bug A (DB-only iteration):
-    Old code iterated `db_positions.items()` — only positions tracked in the DB.
+    Old code iterated db_positions.items() -- only positions tracked in the DB.
     If DB was cleared manually or a position was never recorded, Close All was blind to it.
-    Fix: now iterates union of alpaca_map.keys() | db_positions.keys() — closes ALL Alpaca
+    Fix: now iterates union of alpaca_map.keys() | db_positions.keys() -- closes ALL Alpaca
     positions regardless of whether a DB record exists.
 
   Bug B (duplicate errors):
-    Each step (cancel, close, DB) appended to errors independently → same symbol appeared
+    Each step (cancel, close, DB) appended to errors independently -> same symbol appeared
     multiple times in the error list.
     Fix: collect all step errors into sym_errors list per symbol, join with " | ", append once.
 
   Bug C (UUID crash):
-    o.id is a UUID object in the Alpaca SDK — slicing o.id[:8] raised TypeError.
+    o.id is a UUID object in the Alpaca SDK -- slicing o.id[:8] raised TypeError.
     Fix: str(o.id)[:8] wherever order IDs are displayed.
 
   Bug D (pending_cancel aborts close):
     cancel_order_by_id() raises if order is already in "pending_cancel" state.
-    Old code: one try/except wrapped cancel + close + DB update → cancel failure aborted all.
+    Old code: one try/except wrapped cancel + close + DB update -> cancel failure aborted all.
     Fix: 3 independent try/except blocks. If cancel fails with "pending cancel", set
     orders_pending_cancel=True and SKIP close_position() (Alpaca holds qty until cancel
-    completes — close would fail with "insufficient qty"). DB is always updated.
+    completes -- close would fail with "insufficient qty"). DB is always updated.
 
   Bug E (orphaned positions):
     Alpaca positions with no matching DB record (e.g. entered via API, DB was reset) were
@@ -94,80 +93,110 @@ Root causes and fixes applied:
   Bug F (no market hours check):
     Submitting a close order when market is closed would fail silently or error.
     Fix: _close_all_sync() calls client.get_clock().is_open for equity algos (001/002).
-    If market is closed, returns {"market_closed": True} immediately — no orders submitted.
-    Bot displays: "🕐 Market is closed. Positions can only be closed during trading hours."
-    Crypto (ALGO_003) is 24/7 — no clock check needed there.
+    If market is closed, returns {"market_closed": True} immediately -- no orders submitted.
+    Bot displays: "Market is closed. Positions can only be closed during trading hours."
+    Crypto (ALGO_003) is 24/7 -- no clock check needed there.
 
 How Close All works now (algo_002):
-  1. get_clock().is_open → if False, abort with market_closed message
+  1. get_clock().is_open -> if False, abort with market_closed message
   2. Fetch all Alpaca positions + all open orders + all DB open records
-  3. For each symbol in (Alpaca positions ∪ DB positions):
+  3. For each symbol in (Alpaca positions union DB positions):
        a. Cancel all open orders for that symbol
-          → if "pending cancel" error: skip Alpaca close (Alpaca will auto-close when done)
+          -> if "pending cancel" error: skip Alpaca close (Alpaca will auto-close when done)
        b. Close Alpaca position with market order (skipped if pending_cancel)
        c. Mark DB record closed at current price with reason "manual_close" (if record exists)
-       d. Append symbol to `closed` list regardless
-  4. Display: ✅ Closed (N): SYM1  SYM2  ...
-              ❌ Errors: sym: reason (only if any step failed)
+       d. Append symbol to closed list regardless
+  4. Display: Closed (N): SYM1  SYM2  ...
+              Errors: sym: reason (only if any step failed)
               "No open positions found" only if both Alpaca AND DB had zero open records
 
-Files   : telegram/services/trade.py → _close_all_sync()
-          telegram/handlers/callbacks.py → close_all_confirm handler
+Files   : telegram/services/trade.py -> _close_all_sync()
+          telegram/handlers/callbacks.py -> close_all_confirm handler
 
-[7] All Algos — Telegram report shows full position history (too long) (FIXED in backtesting)
+[7] All Algos - Telegram report shows full position history (too long) (FIXED in backtesting)
 ----------------------------------------------------------------------------------------------
 Symptom : The report message displayed every closed position in the selected period.
           For monthly/yearly reports with many trades this floods the chat.
-Cause   : get_report() passed the full `closed` list directly to _closed_block() with no limit.
+Cause   : get_report() passed the full closed list directly to _closed_block() with no limit.
 Fix     : Slice to latest 5 positions for the Telegram display only.
           Stats block (win rate, avg PnL, total) still computed on the full period dataset.
           If more than 5 positions exist, a footer is shown:
-            "…and N more — see CSV for full history."
-          CSV export and chart are completely unchanged — full history preserved.
-File    : portfolio_manager/reports/reporter.py → get_report()
+            "...and N more -- see CSV for full history."
+          CSV export and chart are completely unchanged -- full history preserved.
+File    : portfolio_manager/reports/reporter.py -> get_report()
 
-[8] ALGO_002 — Bracket TP rejected for penny stocks (FIXED in backtesting)
+[8] ALGO_002 - Bracket TP rejected for penny stocks (FIXED in backtesting)
 ---------------------------------------------------------------------------
 Symptom : Entry fails with Alpaca error:
             "takeprofit.limitprice must be >= baseprice + 0.01"
-          Seen on PRPL at $0.6905 — stock enters candidate list but order is rejected.
+          Seen on PRPL at $0.6905 -- stock enters candidate list but order is rejected.
 Cause   : tp_price = round(last_price * 1.02, 2)
           For cheap stocks, rounding to 2 decimals produces a TP that is less than
           $0.01 above the entry price, violating Alpaca's minimum bracket spread.
-          Example: round(0.6905 * 1.02, 2) = $0.70 → spread = $0.0095 < $0.01 required.
+          Example: round(0.6905 * 1.02, 2) = $0.70 -> spread = $0.0095 < $0.01 required.
 Fix     : After calculating tp_price, clamp it up if too close:
             if tp_price < last_price + 0.01:
                 tp_price = round(last_price + 0.01, 2)
           This satisfies Alpaca's minimum while keeping the normal 2% TP for all other stocks.
-Note    : ALEX error ("asset not active") in the same screenshot is NOT a bug —
+Note    : ALEX error ("asset not active") in the same screenshot is NOT a bug --
           ALEX is simply not listed as a tradeable asset on Alpaca paper trading.
-File    : portfolio_manager/trader/algo002_trader.py → _enter() / bracket order block
+File    : portfolio_manager/trader/algo002_trader.py -> bracket order block
 
-[9] ALGO_002 — Wrong exit price/reason recorded in DB for bracket TP/SL (FIXED in backtesting)
------------------------------------------------------------------------------------------------
-Symptom : HTH closed with exit_price=$36.07 and reason="bracket_exit" in DB, but Alpaca
-          shows the actual TP fill was $36.26 with type="limit" → should be "take_profit".
-          PnL written as +1.46% instead of actual +1.94%.
+[9] ALGO_002 - Wrong exit data in DB + race condition + missing TP/SL notifications (FIXED in backtesting)
+----------------------------------------------------------------------------------------------------------
+Symptoms:
+  A) HTH recorded exit_price=$36.07 reason="bracket_exit" pnl=+1.46% but Alpaca shows
+     actual TP fill at $36.26 type=limit -> should be "take_profit" pnl=+1.94%
+  B) NAVN hit TP while bot was live but no Telegram notification was sent
+  C) Monitoring cycle and TradingStream were both closing the same position -- second
+     write silently overwrote the first with wrong data (race condition)
+  D) All position prices (entry and exit) were sourced from yfinance, not Alpaca
 
-Cause A : _get_bracket_exit() queried last 10 closed orders for the symbol with no date filter.
-          A symbol traded multiple times (e.g. HTH had 2 separate entries) meant stale cancelled/
-          filled orders from a previous entry were matched first, returning the wrong fill price.
-Fix A   : Added `entry_date` parameter to _get_bracket_exit(). Filters to sell orders where
-          filled_at.date() >= entry_date — only orders that could belong to the current position.
+Root causes and fixes:
 
-Cause B : _get_bracket_exit() fell back to yfinance current price if no Alpaca order matched.
-          yfinance returns market price at query time, not the actual bracket fill — completely wrong.
-Fix B   : Removed yfinance fallback entirely. If no Alpaca fill order is found, record None.
-          DB will show exit_price=None / pnl=None rather than a fabricated price.
+  Bug A - Stale order matching in _get_bracket_exit():
+    Old: queried 10 closed orders for the symbol with no date filter -> matched old
+         orders from a previous position in the same symbol (e.g. HTH traded twice).
+    Fix: added entry_date filter -- only considers sell orders where
+         filled_at.date() >= entry_date of the current DB position.
 
-Cause C : entry_price stored in DB was from yfinance fast_info.last_price at order submission
-          time, not the actual Alpaca fill price. Slight drift caused incorrect PnL calculation.
-Fix C   : _get_last_price() in algo002_trader now uses Alpaca StockHistoricalDataClient
-          get_stock_latest_trade() instead of yfinance. Additionally, the TradingStream
-          on_trade_update handler now intercepts buy fill events and calls
-          update_entry_price_002(order_id, fill_price) to overwrite with the exact Alpaca fill.
+  Bug B - No real-time TP/SL notification existed:
+    NAVN and HTH were missed because TradingStream (trade_stream.py) did not exist yet
+    when they closed. Old code had no live bracket fill listener at all.
+    Fix: TradingStream added -- subscribes to Alpaca WebSocket on bot startup.
+         Fires instantly on SELL fill (limit=take_profit, stop=stop_loss):
+         closes DB record + sends Telegram push notification immediately.
+    Note: NAVN/HTH closed before TradingStream was deployed -- not reproducible going forward.
 
-Files   : portfolio_manager/positions/position_monitor.py → _get_bracket_exit(), run_monitoring_cycle()
-          portfolio_manager/trader/algo002_trader.py → _get_last_price()
-          portfolio_manager/positions/position_store.py → update_entry_price_002() (new)
-          telegram/services/trade_stream.py → on_trade_update() buy fill handler
+  Bug C - Race condition: double-write overwrites correct data:
+    TradingStream closes position with correct data, then monitoring cycle runs later
+    and calls close_position() again with potentially stale/wrong data -- second UPDATE wins.
+    Old: close_position() did UPDATE WHERE id=? with no status check -> always overwrote.
+    Fix: close_position() now checks status first -- only proceeds if status='open'.
+         First caller (stream or monitoring cycle) wins. Second call is a no-op.
+         Eliminates all race conditions between the two close paths.
+
+  Bug D - yfinance used for all position prices:
+    Old entry_price: yfinance fast_info.last_price at order submission time.
+    Old exit_price fallback: yfinance current price if no Alpaca order matched.
+    Fix entry: _get_last_price() now uses Alpaca StockLatestTradeRequest (data client).
+               TradingStream buy fill event calls update_entry_price_002(order_id, fill)
+               to overwrite with exact Alpaca filled_avg_price.
+    Fix exit:  yfinance fallback removed from _get_bracket_exit() and run_monitoring_cycle().
+               If no Alpaca fill found, DB records None -- never a fabricated price.
+
+  Cleanup - hourly DB sync removed:
+    The hourly _db_sync_loop was a third close path competing with TradingStream and
+    monitoring cycle, contributing to the race condition and potential duplicates.
+    Removed entirely. TradingStream handles real-time exits. Monitoring cycle in execute()
+    handles time_exit (21-day) detection and catches missed exits from the trade cycle.
+
+Files   : portfolio_manager/positions/position_monitor.py -> _get_bracket_exit() entry_date filter,
+            removed yfinance fallback from run_monitoring_cycle()
+          portfolio_manager/positions/position_store.py -> close_position() idempotency guard,
+            update_entry_price_002() new function
+          portfolio_manager/trader/algo002_trader.py -> _get_last_price() uses Alpaca data client
+          telegram/services/trade_stream.py -> buy fill handler + sell fill notification
+          telegram/services/scheduler.py -> removed _db_sync_loop / start_db_sync,
+            removed silent monitoring call from _positions_update_loop
+          telegram/bot.py -> removed start_db_sync call
