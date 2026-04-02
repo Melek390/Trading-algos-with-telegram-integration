@@ -224,20 +224,42 @@ def _closed_block(rows: list[dict], algo_id: str) -> list[str]:
     return lines
 
 
-def _open_block(open_rows: list[dict]) -> list[str]:
-    """Return Markdown lines listing open positions with live PnL fetched from yfinance."""
+def _alpaca_positions_map() -> dict:
+    """Return a map of symbol -> Alpaca position object for all current open positions."""
+    try:
+        from portfolio_manager.client import get_trading_client
+        return {p.symbol: p for p in get_trading_client().get_all_positions()}
+    except Exception:
+        return {}
+
+
+def _open_block(open_rows: list[dict], alpaca_map: dict) -> list[str]:
+    """
+    Return Markdown lines listing open positions.
+    All prices and P&L are read directly from Alpaca — no yfinance.
+    alpaca_map: {symbol: AlpacaPosition} from get_all_positions().
+    """
     if not open_rows:
         return []
     lines = ["*Open Positions:*"]
     for r in open_rows:
         sym        = r.get("symbol", "?")
-        entry      = r.get("entry_price")
         entry_date = r.get("entry_date", "")
         days_held  = (date.today() - date.fromisoformat(entry_date)).days if entry_date else "?"
-        current    = _current_price(sym)
-        pnl        = _pnl(entry, current)
-        pnl_str    = f"{pnl:+.2f}%" if pnl is not None else "N/A"
-        price_str  = f"${entry:.2f}→${current:.2f}" if entry and current else f"${entry:.2f}" if entry else "N/A"
+
+        ap = alpaca_map.get(sym)
+        if ap:
+            entry   = float(ap.avg_entry_price)
+            current = float(ap.current_price)
+            pnl     = round(float(ap.unrealized_plpc) * 100, 2)
+            pnl_str   = f"{pnl:+.2f}%"
+            price_str = f"${entry:.2f}→${current:.2f}"
+        else:
+            # Position not found on Alpaca — show DB entry price only
+            entry = r.get("entry_price")
+            price_str = f"${entry:.2f}→N/A" if entry else "N/A"
+            pnl_str   = "N/A"
+
         lines.append(f"• `{sym}`  {price_str}  {pnl_str}  (day {days_held})")
     return lines
 
@@ -272,15 +294,22 @@ def get_report_csv(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> by
         for r in _alpaca_open_001():
             writer.writerow([r["symbol"], r["entry_price"], r["current_price"], r["pnl_pct"], r["market_value"], r["qty"]])
     else:
-        open_ = _fetch_open(table, db_path) if table else []
+        open_   = _fetch_open(table, db_path) if table else []
+        ap_map  = _alpaca_positions_map()
         writer.writerow(["symbol", "entry_date", "entry_price", "current_price", "pnl_pct", "days_held", "notional", "order_id"])
         for r in open_:
             sym       = r.get("symbol", "")
-            entry     = r.get("entry_price")
             ed        = r.get("entry_date", "")
             days_held = (date.today() - date.fromisoformat(ed)).days if ed else ""
-            current   = _current_price(sym)
-            pnl       = _pnl(entry, current)
+            ap        = ap_map.get(sym)
+            if ap:
+                entry   = float(ap.avg_entry_price)
+                current = float(ap.current_price)
+                pnl     = round(float(ap.unrealized_plpc) * 100, 2)
+            else:
+                entry   = r.get("entry_price")
+                current = None
+                pnl     = None
             writer.writerow([sym, ed, entry, current, pnl, days_held, r.get("notional"), r.get("order_id")])
 
     return buf.getvalue().encode("utf-8")
@@ -335,7 +364,7 @@ def get_report(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> str:
     else:
         open_rows = _fetch_open(table, db_path)
         if open_rows:
-            parts += _open_block(open_rows)
+            parts += _open_block(open_rows, _alpaca_positions_map())
 
     return "\n".join(parts)
 
