@@ -172,18 +172,40 @@ def _alpaca_open_001() -> list[dict]:
 # ── Formatters ────────────────────────────────────────────────────────────────
 
 def _get_pnl(r: dict, algo_id: str):
-    """Return the PnL value and unit label for a row, handling both % and $ algos."""
+    """
+    Return (pnl_value, unit) for a closed position row.
+    All algos now use dollar P&L:
+      algo_003 — 'pnl' column (already $)
+      algo_002 — (exit_price - entry_price) * shares
+      algo_001 — pnl_pct / 100 * notional
+    """
     if algo_id == "003":
         v = r.get("pnl")
         return (float(v), "$") if v is not None else (None, "$")
-    v = r.get("pnl_pct")
-    return (float(v), "%") if v is not None else (None, "%")
+    if algo_id == "002":
+        ep  = r.get("exit_price")
+        en  = r.get("entry_price")
+        sh  = r.get("shares")
+        if ep is not None and en is not None and sh:
+            return (round((float(ep) - float(en)) * float(sh), 2), "$")
+        # fallback: pnl_pct * notional
+        pct = r.get("pnl_pct")
+        not_ = r.get("notional")
+        if pct is not None and not_:
+            return (round(float(pct) / 100 * float(not_), 2), "$")
+        return (None, "$")
+    # algo_001
+    pct  = r.get("pnl_pct")
+    not_ = r.get("notional")
+    if pct is not None and not_:
+        return (round(float(pct) / 100 * float(not_), 2), "$")
+    return (None, "$")
 
 
 def _stats_block(rows: list[dict], algo_id: str = "001") -> list[str]:
     """Return Markdown lines summarising win rate, avg/total/best/worst PnL for closed rows."""
     pnls = [_get_pnl(r, algo_id)[0] for r in rows if _get_pnl(r, algo_id)[0] is not None]
-    unit = "$" if algo_id == "003" else "%"
+    unit = "$"
     if not pnls:
         return []
     wins     = sum(1 for p in pnls if p > 0)
@@ -375,30 +397,53 @@ def _fetch_closed_since(table: str, start: str, db_path: Path, algo_id: str = "0
     """Fetch closed positions since `start` date, ordered by exit_date."""
     if not db_path.exists():
         return []
-    # ALGO_003 stores dollar P&L in 'pnl'; others store percent in 'pnl_pct'
-    pnl_col = "pnl" if algo_id == "003" else "pnl_pct"
     try:
         with _conn(db_path) as conn:
-            if algo_id != "003":
-                # Heal NULL pnl_pct rows for non-ALGO_003 tables
-                conn.execute(f"""
-                    UPDATE {table}
-                       SET pnl_pct = ROUND((exit_price - entry_price) / entry_price * 100, 4)
-                     WHERE status = 'closed'
-                       AND pnl_pct IS NULL
-                       AND entry_price IS NOT NULL AND entry_price != 0
-                       AND exit_price  IS NOT NULL
-                """)
-            rows = conn.execute(
-                f"""
-                SELECT exit_date, {pnl_col} AS pnl_value FROM {table}
-                WHERE status = 'closed'
-                  AND exit_date >= ?
-                  AND exit_date IS NOT NULL
-                ORDER BY exit_date ASC
-                """,
-                (start,),
-            ).fetchall()
+            if algo_id == "003":
+                # algo_003 already stores dollar P&L in 'pnl' column
+                rows = conn.execute(
+                    f"""
+                    SELECT exit_date, pnl AS pnl_value FROM {table}
+                    WHERE status = 'closed'
+                      AND exit_date >= ?
+                      AND exit_date IS NOT NULL
+                    ORDER BY exit_date ASC
+                    """,
+                    (start,),
+                ).fetchall()
+            elif algo_id == "002":
+                # Dollar P&L = (exit_price - entry_price) * shares
+                rows = conn.execute(
+                    f"""
+                    SELECT exit_date,
+                           ROUND((exit_price - entry_price) * shares, 2) AS pnl_value
+                    FROM {table}
+                    WHERE status = 'closed'
+                      AND exit_date >= ?
+                      AND exit_date IS NOT NULL
+                      AND exit_price IS NOT NULL
+                      AND entry_price IS NOT NULL
+                      AND shares IS NOT NULL
+                    ORDER BY exit_date ASC
+                    """,
+                    (start,),
+                ).fetchall()
+            else:
+                # algo_001: dollar P&L = pnl_pct / 100 * notional
+                rows = conn.execute(
+                    f"""
+                    SELECT exit_date,
+                           ROUND(pnl_pct / 100.0 * notional, 2) AS pnl_value
+                    FROM {table}
+                    WHERE status = 'closed'
+                      AND exit_date >= ?
+                      AND exit_date IS NOT NULL
+                      AND pnl_pct IS NOT NULL
+                      AND notional IS NOT NULL
+                    ORDER BY exit_date ASC
+                    """,
+                    (start,),
+                ).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []
@@ -520,13 +565,12 @@ def get_report_chart(algo_id: str, period: str = "monthly", db_path: Path = _DEF
         ax.set_xticks(visible_xs)
         ax.set_xticklabels(visible_labels, rotation=40, ha="right", fontsize=7, color="#cccccc")
 
-        pnl_unit = "$" if algo_id == "003" else "%"
-        ylabel   = f"Cumulative P&L {pnl_unit}"
+        ylabel = "Cumulative P&L $"
         ax.set_ylabel(ylabel, fontsize=8, color="#cccccc")
         ax.set_title(title, color="#eeeeee", fontsize=10, pad=8)
 
         # Annotate final value
-        final_label = f"${y_vals[-1]:+.2f}" if algo_id == "003" else f"{y_vals[-1]:+.2f}%"
+        final_label = f"${y_vals[-1]:+.2f}"
         ax.annotate(
             final_label,
             xy=(xs[-1], y_vals[-1]),
