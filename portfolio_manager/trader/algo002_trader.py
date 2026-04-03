@@ -49,6 +49,7 @@ class MultiTradeResult:
     exits:       list[dict] = field(default_factory=list)
     held:        list[dict] = field(default_factory=list)
     near_misses: list       = field(default_factory=list)   # [(sym, score, n_cond, row), ...]
+    qualified:   list       = field(default_factory=list)   # qualified but not entered this cycle
     gate_msg:    str        = ""
     error:       str        = ""
 
@@ -114,11 +115,14 @@ def execute(db_path: Path = _DEFAULT_DB) -> MultiTradeResult:
         except Exception:
             blocked = set()
 
-        candidates = [
+        all_qualified = [
             (sym, score, n_cond, row)
             for sym, score, n_cond, row in signal.candidates
             if passes_conditions(row) and not is_open(sym, db_path) and sym not in blocked
-        ][:slots]
+        ]
+        # Only 1 new entry per cycle — remaining qualified go to watchlist buttons
+        candidates              = all_qualified[:1]
+        result.qualified        = all_qualified[1:]  # shown as watchlist add buttons
 
         if candidates:
             try:

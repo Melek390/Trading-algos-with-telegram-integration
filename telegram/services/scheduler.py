@@ -331,23 +331,39 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
             button_rows = []
 
             if algo_id == "002" and _trade_result is not None:
+                # Qualified stocks not entered this cycle (slots=1 limit)
+                qualified   = getattr(_trade_result, "qualified",   None) or []
                 near_misses = getattr(_trade_result, "near_misses", None) or []
-                top3 = near_misses[:3]
-                if top3:
-                    # Cache near-miss metadata so handle_cal_follow can store it
+
+                # Merge: qualified first (fully pass conditions), then near-misses
+                # Deduplicate and cap at 6 buttons total (2 rows of 3)
+                seen: set[str] = set()
+                watchlist_candidates = []
+                for item in qualified + near_misses:
+                    sym = item[0]
+                    if sym not in seen:
+                        seen.add(sym)
+                        watchlist_candidates.append(item)
+                    if len(watchlist_candidates) == 6:
+                        break
+
+                if watchlist_candidates:
+                    # Cache metadata for handle_cal_follow
                     app.bot_data["algo002_near_misses"] = {
                         sym: {
                             "conditions_met":   n_cond,
                             "eps_beat_pct":     row.get("eps_beat_pct"),
                             "revenue_beat_pct": row.get("revenue_beat_pct"),
                         }
-                        for sym, _, n_cond, row in top3
+                        for sym, _, n_cond, row in watchlist_candidates
                     }
-                    # Use algo002_add_ so tapping never navigates away to the calendar
-                    button_rows.append([
-                        InlineKeyboardButton(f"+ {sym}", callback_data=f"algo002_add_{sym}")
-                        for sym, *_ in top3
-                    ])
+                    # Split into rows of 3
+                    for i in range(0, len(watchlist_candidates), 3):
+                        chunk = watchlist_candidates[i:i+3]
+                        button_rows.append([
+                            InlineKeyboardButton(f"+ {sym}", callback_data=f"algo002_add_{sym}")
+                            for sym, *_ in chunk
+                        ])
 
             button_rows.append([InlineKeyboardButton("« Back to Menu", callback_data="back_main")])
             keyboard = InlineKeyboardMarkup(button_rows)
