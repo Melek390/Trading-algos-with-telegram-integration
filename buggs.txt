@@ -220,3 +220,35 @@ Fix     : Added _alpaca_positions_map() -- fetches all open positions from Alpac
           Reporter open positions now show identical numbers to Portfolio Status.
 Files   : portfolio_manager/reports/reporter.py -> _open_block(), _alpaca_positions_map() (new),
             get_report(), get_report_csv()
+
+[11] ALGO_001 and ALGO_002 reports - P&L shown in % instead of $ (FIXED in backtesting)
+-----------------------------------------------------------------------------------------
+Symptom : Charts and closed position stats for ALGO_001 and ALGO_002 showed percentage
+          P&L (e.g. +0.43%) instead of dollar amounts. ALGO_003 already showed dollars.
+          Summing percentages across positions is meaningless (different position sizes).
+Cause   : _get_pnl(), _stats_block(), _fetch_closed_since(), and chart labels all used
+          pnl_pct column and "%" unit for algo_001 and algo_002.
+Fix     : All algos now use dollar P&L throughout:
+          algo_002: (exit_price - entry_price) * shares
+          algo_001: pnl_pct / 100 * notional
+          algo_003: pnl column (unchanged)
+          Chart Y-axis, final annotation, stats block all use "$" uniformly.
+Files   : portfolio_manager/reports/reporter.py -> _get_pnl(), _stats_block(),
+            _fetch_closed_since(), get_report_chart()
+
+[12] ALGO_002 - Multiple entries per auto-refresh cycle (FIXED in backtesting)
+-------------------------------------------------------------------------------
+Symptom : Each auto-refresh could open up to 5 new positions simultaneously.
+          User had no way to review and approve remaining qualified candidates before
+          they were auto-entered.
+Cause   : slots = max(0, _MAX_POSITIONS - current_open) allowed multiple entries per cycle.
+          All qualified candidates beyond near-misses were not surfaced to the user.
+Fix     : slots capped at 1 per cycle -- only the top-scored qualified candidate is entered.
+          All remaining qualified candidates (fully pass conditions) are stored in
+          result.qualified and merged with near_misses as watchlist add buttons.
+          User sees up to 6 "+" buttons (qualified first, then near-misses) to manually
+          add stocks to watchlist at their discretion.
+Files   : portfolio_manager/trader/algo002_trader.py -> MultiTradeResult.qualified,
+            all_qualified/candidates split with slots=1
+          telegram/services/scheduler.py -> watchlist button builder merges
+            result.qualified + near_misses, deduped, up to 6 buttons in rows of 3
