@@ -120,20 +120,26 @@ def execute(db_path: Path = _DEFAULT_DB) -> MultiTradeResult:
             for sym, score, n_cond, row in signal.candidates
             if passes_conditions(row) and not is_open(sym, db_path) and sym not in blocked
         ]
-        # Only 1 new entry per cycle — remaining qualified go to watchlist buttons
-        candidates              = all_qualified[:1]
-        result.qualified        = all_qualified[1:]  # shown as watchlist add buttons
+        # result.qualified will be set inside the loop once we know which index succeeded
+        result.qualified = []
 
-        if candidates:
+        if all_qualified and slots > 0:
             try:
-                total_capital = get_algo_capital("002")
+                total_capital    = get_algo_capital("002")
                 max_per_position = round(total_capital * 0.30, 2)   # hard cap: 30% of capital per position
-                per_position     = round(min(total_capital / len(candidates), max_per_position), 2)
+                per_position     = round(min(total_capital, max_per_position), 2)
             except Exception as e:
                 result.error = f"Capital manager error: {e}"
                 return result
 
-            for sym, score, n_cond, row in candidates:
+            # Keywords that indicate the asset is not tradable on Alpaca (paper or live)
+            _NOT_TRADABLE = ("not active", "asset not found", "not tradable",
+                             "asset not available", "forbidden", "not fractionable",
+                             "is not available")
+
+            # Try each qualified candidate in score order; skip Alpaca-unavailable assets.
+            # Stop after the first successful entry (max 1 entry per cycle — bug #12).
+            for idx, (sym, score, n_cond, row) in enumerate(all_qualified):
                 try:
                     # Fetch live price to calculate qty and bracket prices
                     last_price = _get_last_price(sym)
@@ -173,29 +179,40 @@ def execute(db_path: Path = _DEFAULT_DB) -> MultiTradeResult:
                         db_path     = db_path,
                     )
                     result.entries.append({
-                        "symbol":     sym,
-                        "notional":   per_position,
-                        "qty":        qty,
+                        "symbol":      sym,
+                        "notional":    per_position,
+                        "qty":         qty,
                         "entry_price": last_price,
-                        "tp_price":   tp_price,
-                        "sl_price":   sl_price,
-                        "order_id":   str(order.id),
-                        "score":      score,
+                        "tp_price":    tp_price,
+                        "sl_price":    sl_price,
+                        "order_id":    str(order.id),
+                        "score":       score,
                     })
                     logger.info(
-                        "algo002: BUY %s  qty=%.4f  $%.0f  TP=$%.2f  SL=$%.2f  order=%s",
+                        "algo002: BUY %s  qty=%d  $%.0f  TP=$%.2f  SL=$%.2f  order=%s",
                         sym, qty, per_position, tp_price, sl_price, order.id,
                     )
+                    result.qualified = all_qualified[idx + 1:]  # remaining → watchlist
+                    break  # 1 successful entry per cycle — done
 
                 except Exception as e:
-                    logger.error("algo002: order failed for %s: %s", sym, e)
-                    result.entries.append({
-                        "symbol":   sym,
-                        "notional": per_position,
-                        "order_id": None,
-                        "score":    score,
-                        "error":    str(e),
-                    })
+                    err_str = str(e).lower()
+                    if any(kw in err_str for kw in _NOT_TRADABLE):
+                        # Asset not available on Alpaca — skip silently and try the next candidate
+                        logger.warning("algo002: %s not available on Alpaca — trying next candidate", sym)
+                        continue
+                    else:
+                        # Unexpected error (capital, price fetch, API, …) — report it and stop
+                        logger.error("algo002: order failed for %s: %s", sym, e)
+                        result.entries.append({
+                            "symbol":   sym,
+                            "notional": per_position,
+                            "order_id": None,
+                            "score":    score,
+                            "error":    str(e),
+                        })
+                        result.qualified = all_qualified[idx + 1:]  # remaining → watchlist
+                        break  # don't try more on a non-availability error
 
     # ── 5. Held-positions snapshot ─────────────────────────────────────────────
     try:

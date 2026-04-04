@@ -263,3 +263,20 @@ Fix     : After asyncio.sleep(), check datetime.now(timezone.utc).weekday() >= 5
           If Saturday (5) or Sunday (6), log and continue -- no pipeline, no trade,
           no Telegram message sent. Loop sleeps until the next scheduled time.
 File    : telegram/services/scheduler.py -> _scheduler_loop()
+
+[14] ALGO_002 - Entry skips unavailable Alpaca assets and tries next qualified stock (FIXED in backtesting)
+-----------------------------------------------------------------------------------------------------------
+Symptom : If the top qualified candidate is not tradable on Alpaca (e.g. "asset not active",
+          seen for ALEX, PRPL on paper trading), execute() reported an error and entered
+          nothing -- even though lower-ranked qualified stocks were available.
+Cause   : candidates = all_qualified[:1] meant only 1 stock was ever attempted.
+          Any error (including Alpaca availability errors) ended the entry loop.
+Fix     : Iterate through all_qualified in score order until 1 entry succeeds.
+          If Alpaca returns a not-tradable error (keywords: "not active", "asset not found",
+          "not tradable", "asset not available", "forbidden", "is not available"),
+          log a warning and continue to the next candidate -- no error shown to user.
+          Non-availability errors (capital, price fetch, API) are still reported and stop
+          the loop. Max 1 entry per cycle is still enforced (bug #12 unchanged).
+          result.qualified is set to all_qualified[idx+1:] after success or non-avail error,
+          so watchlist buttons always reflect stocks that were not entered this cycle.
+File    : portfolio_manager/trader/algo002_trader.py -> execute() entry loop
