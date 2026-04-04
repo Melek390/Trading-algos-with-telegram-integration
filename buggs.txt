@@ -252,3 +252,14 @@ Files   : portfolio_manager/trader/algo002_trader.py -> MultiTradeResult.qualifi
             all_qualified/candidates split with slots=1
           telegram/services/scheduler.py -> watchlist button builder merges
             result.qualified + near_misses, deduped, up to 6 buttons in rows of 3
+
+[13] All Algos - auto-refresh fires on weekends when market is closed (FIXED in backtesting)
+---------------------------------------------------------------------------------------------
+Symptom : ALGO_001 and ALGO_002 scheduled auto-refresh ran on Saturday and Sunday,
+          running the full pipeline and attempting trades on a closed market.
+Cause   : _scheduler_loop() had no weekday check -- it fired at the scheduled UTC time
+          every day including weekends.
+Fix     : After asyncio.sleep(), check datetime.now(timezone.utc).weekday() >= 5.
+          If Saturday (5) or Sunday (6), log and continue -- no pipeline, no trade,
+          no Telegram message sent. Loop sleeps until the next scheduled time.
+File    : telegram/services/scheduler.py -> _scheduler_loop()
