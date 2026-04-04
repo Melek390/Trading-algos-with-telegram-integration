@@ -269,6 +269,11 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
             )
             await asyncio.sleep(secs)
 
+            # ── Skip weekends (US market closed Sat/Sun) ────────────────────────
+            if datetime.now(timezone.utc).weekday() >= 5:  # 5=Sat, 6=Sun
+                logger.info("%s auto-refresh skipped — weekend", info["name"])
+                continue
+
             # ── Notify start ────────────────────────────────────────────────────
             await app.bot.send_message(
                 chat_id=chat_id,
