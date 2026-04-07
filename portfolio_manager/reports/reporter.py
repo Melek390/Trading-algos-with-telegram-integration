@@ -54,16 +54,19 @@ _REASON_LABELS = {
 
 def _date_range(period: str) -> tuple[str, str]:
     """Return (start_date_iso, today_iso) for a given period window.
-    Supported: 'weekly' (7d), 'monthly' (30d), 'yearly' (365d).
+    weekly  -> Monday of the current week -> today
+    monthly -> 1st of the current month   -> today
+    yearly  -> Jan 1st of the current year -> today
     """
     today = date.today()
     if period == "weekly":
-        delta = timedelta(days=7)
+        # weekday() returns 0 for Monday -- subtract to land on this week's Monday
+        start = today - timedelta(days=today.weekday())
     elif period == "monthly":
-        delta = timedelta(days=30)
+        start = today.replace(day=1)
     else:  # yearly
-        delta = timedelta(days=365)
-    return (today - delta).isoformat(), today.isoformat()
+        start = today.replace(month=1, day=1)
+    return start.isoformat(), today.isoformat()
 
 
 def _conn(db_path: Path) -> sqlite3.Connection:
@@ -453,9 +456,9 @@ def get_report_chart(algo_id: str, period: str = "monthly", db_path: Path = _DEF
     """
     Generate a single-panel cumulative P&L chart for the given period.
 
-    - weekly  → one data point per day for the last 7 days
-    - monthly → one data point per day for the last 30 days
-    - yearly  → one data point per week for the last 52 weeks
+    - weekly  → one data point per day from Monday of current week to today
+    - monthly → one data point per day from 1st of current month to today
+    - yearly  → one data point per week from Jan 1st of current year to today
 
     X-axis sits at y=0 so negative territory is visible below the line.
     Only closed (realised) positions are counted.
