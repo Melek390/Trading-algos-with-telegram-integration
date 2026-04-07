@@ -280,3 +280,17 @@ Fix     : Iterate through all_qualified in score order until 1 entry succeeds.
           result.qualified is set to all_qualified[idx+1:] after success or non-avail error,
           so watchlist buttons always reflect stocks that were not entered this cycle.
 File    : portfolio_manager/trader/algo002_trader.py -> execute() entry loop
+
+[15] Reporter - Weekly/monthly reports showed wrong date range (rolling window instead of calendar) (FIXED in backtesting)
+----------------------------------------------------------------------------------------------------------------------------
+Symptom : Clicking Weekly Report returned trades from the past 7 days rolling window
+          (e.g. Mon Mar 30 - Mon Apr 6) instead of the current calendar week (Mon - today).
+          Monthly Report showed the last 30 days instead of from the 1st of the month.
+Cause   : _date_range() used timedelta(days=7/30/365) subtracted from today, giving a
+          rolling window that shifts every day rather than anchoring to a calendar boundary.
+Fix     : Use calendar-anchored start dates:
+            weekly  -> Monday of the current week (today - timedelta(days=today.weekday()))
+            monthly -> 1st of the current month   (today.replace(day=1))
+            yearly  -> Jan 1st of current year    (today.replace(month=1, day=1))
+          End date remains today in all cases.
+File    : portfolio_manager/reports/reporter.py -> _date_range()
