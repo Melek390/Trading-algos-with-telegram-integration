@@ -43,7 +43,7 @@ POSITIONS_UTC_HOUR   = 16
 POSITIONS_UTC_MINUTE = 24
 
 # ── Watchlist performance alert ────────────────────────────────────────────────
-WATCHLIST_PERF_UTC_HOUR      = 16
+WATCHLIST_PERF_UTC_HOUR      = 18
 WATCHLIST_PERF_UTC_MINUTE    = 25
 WATCHLIST_GAIN_THRESHOLD_PCT = 1.0  # notify if stock is up > 1 % from add date
 
@@ -77,8 +77,8 @@ ALGOS: dict[str, dict] = {
         "signal":      False,        # handled by auto-refresh scheduler
         "tradeable":   True,         # scheduler executes trades automatically
         "schedulable": True,
-        "sched_utc_hour":   16,
-        "sched_utc_minute": 21,
+        "sched_utc_hour":   18,
+        "sched_utc_minute": 24,
     },
     "003": {
         "name":        "ALGO_003 — SMA Crossover",
