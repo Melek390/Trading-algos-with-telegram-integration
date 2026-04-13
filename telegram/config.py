@@ -78,7 +78,7 @@ ALGOS: dict[str, dict] = {
         "tradeable":   True,         # scheduler executes trades automatically
         "schedulable": True,
         "sched_utc_hour":   18,
-        "sched_utc_minute": 24,
+        "sched_utc_minute": 46,
     },
     "003": {
         "name":        "ALGO_003 — SMA Crossover",
