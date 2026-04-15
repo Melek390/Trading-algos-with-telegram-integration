@@ -258,6 +258,36 @@ def _alpaca_positions_map() -> dict:
         return {}
 
 
+def _alpaca_entry_dates(symbols: list[str]) -> dict[str, str]:
+    """
+    Return {symbol: entry_date_iso} by looking up the most recent filled BUY order
+    for each symbol on Alpaca. 100% Alpaca — no DB read.
+    """
+    if not symbols:
+        return {}
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        from portfolio_manager.client import get_trading_client
+        client = get_trading_client()
+        result: dict[str, str] = {}
+        for sym in symbols:
+            try:
+                orders = client.get_orders(
+                    GetOrdersRequest(status=QueryOrderStatus.CLOSED, symbols=[sym], limit=20)
+                )
+                # Find most recent filled BUY (the original entry)
+                for o in sorted(orders, key=lambda x: x.filled_at or date.min, reverse=True):
+                    if str(o.side).lower() in ("buy", "orderside.buy") and o.filled_at:
+                        result[sym] = o.filled_at.date().isoformat()
+                        break
+            except Exception:
+                pass
+        return result
+    except Exception:
+        return {}
+
+
 def _open_block(open_rows: list[dict], alpaca_map: dict) -> list[str]:
     """
     Return Markdown lines listing open positions.
@@ -387,9 +417,27 @@ def get_report(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> str:
         else:
             parts += ["_No open position in Alpaca._"]
     else:
-        open_rows = _fetch_open(table, db_path)
-        if open_rows:
-            parts += _open_block(open_rows, _alpaca_positions_map())
+        # ALGO_002/003: 100% Alpaca — position list, prices, and entry dates all from Alpaca.
+        # DB is never consulted for open positions display.
+        alpaca_map = _alpaca_positions_map()
+        algo_positions = {
+            sym: ap for sym, ap in alpaca_map.items()
+            if sym not in _ALGO_001_SYMBOLS
+        }
+        if algo_positions:
+            entry_dates = _alpaca_entry_dates(list(algo_positions.keys()))
+            parts += ["*Open Positions:*"]
+            for sym, ap in algo_positions.items():
+                entry     = float(ap.avg_entry_price)
+                current   = float(ap.current_price)
+                pnl       = round(float(ap.unrealized_plpc) * 100, 2)
+                pnl_str   = f"{pnl:+.2f}%"
+                price_str = f"${entry:.2f}→${current:.2f}"
+                ed        = entry_dates.get(sym, "")
+                days_held = (date.today() - date.fromisoformat(ed)).days if ed else "?"
+                parts.append(f"• `{sym}`  {price_str}  {pnl_str}  (day {days_held})")
+        else:
+            parts += ["_No open positions._"]
 
     return "\n".join(parts)
 
