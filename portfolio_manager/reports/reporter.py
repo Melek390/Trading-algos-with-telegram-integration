@@ -445,57 +445,72 @@ def get_report(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> str:
 # ── Chart ──────────────────────────────────────────────────────────────────────
 
 def _fetch_closed_since(table: str, start: str, db_path: Path, algo_id: str = "001") -> list[dict]:
-    """Fetch closed positions since `start` date, ordered by exit_date."""
-    if not db_path.exists():
-        return []
+    """
+    Fetch closed position P&L for the chart directly from Alpaca order history.
+    Logic:
+      - Pull all CLOSED orders since `start` for the relevant symbol universe
+      - Pair each filled SELL with the most recent preceding filled BUY for that symbol
+      - PnL = (sell_fill_price - buy_fill_price) * qty
+    Returns [{exit_date: str, pnl_value: float}, ...] sorted by exit_date ASC.
+    """
     try:
-        with _conn(db_path) as conn:
-            if algo_id == "003":
-                # algo_003 already stores dollar P&L in 'pnl' column
-                rows = conn.execute(
-                    f"""
-                    SELECT exit_date, pnl AS pnl_value FROM {table}
-                    WHERE status = 'closed'
-                      AND exit_date >= ?
-                      AND exit_date IS NOT NULL
-                    ORDER BY exit_date ASC
-                    """,
-                    (start,),
-                ).fetchall()
-            elif algo_id == "002":
-                # Dollar P&L = (exit_price - entry_price) * shares
-                rows = conn.execute(
-                    f"""
-                    SELECT exit_date,
-                           ROUND((exit_price - entry_price) * shares, 2) AS pnl_value
-                    FROM {table}
-                    WHERE status = 'closed'
-                      AND exit_date >= ?
-                      AND exit_date IS NOT NULL
-                      AND exit_price IS NOT NULL
-                      AND entry_price IS NOT NULL
-                      AND shares IS NOT NULL
-                    ORDER BY exit_date ASC
-                    """,
-                    (start,),
-                ).fetchall()
-            else:
-                # algo_001: dollar P&L = pnl_pct / 100 * notional
-                rows = conn.execute(
-                    f"""
-                    SELECT exit_date,
-                           ROUND(pnl_pct / 100.0 * notional, 2) AS pnl_value
-                    FROM {table}
-                    WHERE status = 'closed'
-                      AND exit_date >= ?
-                      AND exit_date IS NOT NULL
-                      AND pnl_pct IS NOT NULL
-                      AND notional IS NOT NULL
-                    ORDER BY exit_date ASC
-                    """,
-                    (start,),
-                ).fetchall()
-        return [dict(r) for r in rows]
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        from portfolio_manager.client import get_trading_client
+        from datetime import datetime, timezone
+
+        client   = get_trading_client()
+        start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
+
+        all_orders = client.get_orders(
+            GetOrdersRequest(status=QueryOrderStatus.CLOSED, after=start_dt, limit=500)
+        )
+
+        # Filter by algo universe
+        if algo_id == "001":
+            orders = [o for o in all_orders if o.symbol in _ALGO_001_SYMBOLS]
+        else:
+            orders = [o for o in all_orders if o.symbol not in _ALGO_001_SYMBOLS]
+
+        # Separate filled buys and sells, sorted by fill time
+        buys = sorted(
+            [o for o in orders
+             if str(o.side).lower() in ("buy", "orderside.buy")
+             and o.filled_at and o.filled_avg_price],
+            key=lambda o: o.filled_at,
+        )
+        sells = sorted(
+            [o for o in orders
+             if str(o.side).lower() in ("sell", "orderside.sell")
+             and o.filled_at and o.filled_avg_price],
+            key=lambda o: o.filled_at,
+        )
+
+        results: list[dict] = []
+        for sell in sells:
+            sym        = sell.symbol
+            sell_time  = sell.filled_at
+            sell_price = float(sell.filled_avg_price)
+            qty        = float(sell.filled_qty)
+
+            # Find the most recent BUY for this symbol filled before this SELL
+            matching_buy = None
+            for buy in reversed(buys):
+                if buy.symbol == sym and buy.filled_at < sell_time:
+                    matching_buy = buy
+                    break
+
+            if matching_buy is None:
+                continue
+
+            pnl = round((sell_price - float(matching_buy.filled_avg_price)) * qty, 2)
+            results.append({
+                "exit_date": sell_time.date().isoformat(),
+                "pnl_value": pnl,
+            })
+
+        return sorted(results, key=lambda x: x["exit_date"])
+
     except Exception:
         return []
 
