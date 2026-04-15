@@ -111,10 +111,10 @@ def start_trade_stream(app) -> None:
 
             if otype == "limit":
                 exit_reason = "take_profit"
-                emoji, label = "🟢", "Take Profit \\+2%"
+                emoji, label = "🟢", "Take Profit \\+4%"
             elif otype == "stop":
                 exit_reason = "stop_loss"
-                emoji, label = "🔴", "Stop Loss \\-1%"
+                emoji, label = "🔴", "Stop Loss \\-2%"
             else:
                 return  # market sell (manual) — not handled here
 
