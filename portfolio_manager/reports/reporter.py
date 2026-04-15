@@ -38,8 +38,8 @@ _TABLES = {
 }
 
 _REASON_LABELS = {
-    "take_profit":    "TP +2%",
-    "stop_loss":      "SL -1%",
+    "take_profit":    "TP +4%",
+    "stop_loss":      "SL -2%",
     "time_exit":      "3wk exit",
     "bracket_exit":   "bracket",
     "rebalance":      "rebalance",

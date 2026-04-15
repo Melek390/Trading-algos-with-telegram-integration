@@ -200,8 +200,8 @@ def _format_002(result) -> str:
         lines.append("🔴 *Positions Closed:*")
         for ex in result.exits:
             reason_label = {
-                "take_profit":  "take\\_profit (+2%)",
-                "stop_loss":    "stop\\_loss (−1%)",
+                "take_profit":  "take\\_profit (+4%)",
+                "stop_loss":    "stop\\_loss (−2%)",
                 "time_exit":    "time\\_exit (3wk)",
                 "bracket_exit": "bracket\\_exit",
             }.get(ex["exit_reason"], ex["exit_reason"])
