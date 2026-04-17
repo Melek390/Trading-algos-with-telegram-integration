@@ -105,10 +105,39 @@ def start_trade_stream(app) -> None:
                     logger.warning("trade_stream: could not update entry_price for %s: %s", symbol, e)
                 return
 
-            # ── SELL fill: bracket TP or SL closed the position ───────────────
+            # ── SELL fill: TP/SL (ALGO_002 bracket) or exit (ALGO_003) ──────────
             if side != "sell":
                 return
 
+            # ── ALGO_003 market sell (SMA exit / profit threshold / manual) ──────
+            if otype == "market" and symbol not in _ALGO_001_SYMBOLS:
+                try:
+                    from portfolio_manager.trader.algo003_trader import get_open_pos, close_pos
+                    db_003 = get_open_pos(symbol)
+                    if db_003:
+                        pos     = db_003[0]
+                        ep      = float(pos["entry_price"])
+                        mult    = 1 if pos["direction"] == "long" else -1
+                        pnl     = round((fill_price - ep) * pos["shares"] * mult, 2) if fill_price else None
+                        close_pos(pos["id"], fill_price or ep, "sma_exit")
+                        direction_label = "Long" if pos["direction"] == "long" else "Short"
+                        fill_str = f"${fill_price:.4f}" if fill_price else "N/A"
+                        pnl_str  = f"{'+'if pnl>=0 else ''}${pnl:.2f}" if pnl is not None else "N/A"
+                        msg = (
+                            f"⚪ *ALGO\\_003 Exit*\n\n"
+                            f"`{symbol}` {direction_label}  "
+                            f"${ep:.4f} → {fill_str}  *{pnl_str}*"
+                        )
+                        logger.info(
+                            "trade_stream: ALGO_003 %s exit fill=%.4f pnl=%s",
+                            symbol, fill_price or 0, pnl_str,
+                        )
+                        asyncio.run_coroutine_threadsafe(_notify(app, msg), main_loop)
+                except Exception as e:
+                    logger.warning("trade_stream: ALGO_003 market exit error for %s: %s", symbol, e)
+                return
+
+            # ── ALGO_002 bracket TP / SL ─────────────────────────────────────────
             if otype == "limit":
                 exit_reason = "take_profit"
                 emoji, label = "🟢", "Take Profit \\+4%"
@@ -116,11 +145,9 @@ def start_trade_stream(app) -> None:
                 exit_reason = "stop_loss"
                 emoji, label = "🔴", "Stop Loss \\-2%"
             else:
-                return  # market sell (manual) — not handled here
+                return
 
-            fill_price = float(order.filled_avg_price) if order.filled_avg_price else None
-
-            # Find the open DB record for this symbol
+            # Find the open ALGO_002 DB record for this symbol
             from portfolio_manager.positions.position_store import (
                 get_open_positions, close_position,
             )

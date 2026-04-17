@@ -53,8 +53,6 @@ def _main_menu_kb(chat_id: int, bot_data: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⚙️ Configure",      callback_data="algo003_config")],
         [InlineKeyboardButton(toggle_label,         callback_data=toggle_cb)],
-        [InlineKeyboardButton("📊 Positions",       callback_data="algo003_positions")],
-        [InlineKeyboardButton("📋 Reports",         callback_data="algo003_reports")],
         [InlineKeyboardButton("🚫 Close All",       callback_data="algo003_close_all")],
         [InlineKeyboardButton("« Back",             callback_data="menu_set_algo")],
     ])
@@ -237,81 +235,29 @@ async def handle_algo003_ask_daily(update: Update, context: ContextTypes.DEFAULT
     )
 
 
-async def handle_algo003_positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query   = update.callback_query
-    chat_id = query.message.chat_id
-
-    from portfolio_manager.trader.algo003_trader import get_open_pos
-    positions = get_open_pos()
-
-    if not positions:
-        text = "*ALGO\\_003 — Open Positions*\n\n_No open positions._"
-    else:
-        lines = ["*ALGO\\_003 — Open Positions*\n"]
-        for p in positions:
-            direction = "📈 LONG" if p["direction"] == "long" else "📉 SHORT"
-            lines.append(
-                f"{direction} `{p['symbol']}`\n"
-                f"  Entry: `${p['entry_price']:.4f}`  Qty: `{p['shares']:.4f}`\n"
-                f"  Date: `{p['entry_date']}`"
-            )
-        text = "\n\n".join(lines)
-
-    await query.edit_message_text(
-        text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Refresh",  callback_data="algo003_positions")],
-            [InlineKeyboardButton("« Back",      callback_data="algo_003")],
-        ]),
-    )
-
-
-async def handle_algo003_reports(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-
-    from portfolio_manager.trader.algo003_trader import get_closed_positions
-    trades = get_closed_positions(days=30)
-
-    if not trades:
-        text = "*ALGO\\_003 — Reports (30d)*\n\n_No closed trades in the last 30 days._"
-    else:
-        total_pnl = sum(t.get("pnl") or 0 for t in trades)
-        wins      = sum(1 for t in trades if (t.get("pnl") or 0) > 0)
-        total     = len(trades)
-        win_rate  = round(wins / total * 100) if total else 0
-
-        lines = [
-            f"*ALGO\\_003 — Reports (30d)*\n",
-            f"Trades: `{total}`  |  Win rate: `{win_rate}%`",
-            f"Total P&L: `{'+'if total_pnl>=0 else ''}${total_pnl:.2f}`\n",
-            "```",
-        ]
-        for t in trades[:15]:  # show last 15
-            pnl  = t.get("pnl") or 0
-            sign = "+" if pnl >= 0 else ""
-            lines.append(
-                f"{t['exit_date']}  {t['symbol']:<8}  {t['direction']:<5}  {sign}${pnl:.2f}"
-            )
-        lines.append("```")
-        text = "\n".join(lines)
-
-    await query.edit_message_text(
-        text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("« Back", callback_data="algo_003")],
-        ]),
-    )
-
-
 async def handle_algo003_close_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query   = update.callback_query
     chat_id = query.message.chat_id
 
-    from portfolio_manager.trader.algo003_trader import get_open_pos, close_pos, _is_crypto
+    from portfolio_manager.trader.algo003_config import load_config as _load_cfg
+    from portfolio_manager.trader.algo003_trader import _is_crypto, _alpaca_crypto_sym, get_open_pos, close_pos
     from portfolio_manager.client import get_trading_client
+    from alpaca.trading.requests import GetOrdersRequest
+    from alpaca.trading.enums import QueryOrderStatus
 
-    positions = get_open_pos()
-    if not positions:
+    cfg        = _load_cfg(chat_id)
+    symbols    = set(cfg.get("symbols", []))
+    client     = get_trading_client()
+    alpaca_all = {p.symbol: p for p in client.get_all_positions()}
+
+    # Match configured ALGO_003 symbols to open Alpaca positions
+    open_pairs = []
+    for sym in symbols:
+        alpaca_sym = _alpaca_crypto_sym(sym) if _is_crypto(sym) else sym
+        if alpaca_sym in alpaca_all:
+            open_pairs.append((sym, alpaca_sym, alpaca_all[alpaca_sym]))
+
+    if not open_pairs:
         await query.edit_message_text(
             "ℹ️ No open ALGO\\_003 positions to close.",
             parse_mode="Markdown",
@@ -321,17 +267,9 @@ async def handle_algo003_close_all(update: Update, context: ContextTypes.DEFAULT
         )
         return
 
-    from alpaca.trading.requests import GetOrdersRequest
-    from alpaca.trading.enums import QueryOrderStatus
-
-    client = get_trading_client()
     closed = []
-    for pos in positions:
-        sym        = pos["symbol"]
-        is_crypto  = _is_crypto(sym)
-        alpaca_sym = sym.replace("/", "") if is_crypto else sym
+    for sym, alpaca_sym, ap in open_pairs:
         try:
-            # 1. Cancel any pending orders for this symbol first
             open_orders = client.get_orders(GetOrdersRequest(
                 status=QueryOrderStatus.OPEN, symbols=[alpaca_sym]
             ))
@@ -341,15 +279,21 @@ async def handle_algo003_close_all(update: Update, context: ContextTypes.DEFAULT
                 except Exception:
                     pass
 
-            # 2. Close the position if it exists
-            ap = {p.symbol: p for p in client.get_all_positions()}
-            ep = float(ap[alpaca_sym].current_price) if alpaca_sym in ap else pos["entry_price"]
-            if alpaca_sym in ap:
-                client.close_position(alpaca_sym)
+            exit_price  = float(ap.current_price)
+            entry_price = float(ap.avg_entry_price) if ap.avg_entry_price else exit_price
+            shares      = abs(float(ap.qty))
+            direction   = "long" if float(ap.qty) > 0 else "short"
 
-            pnl = close_pos(pos["id"], ep, "manual_close")
-            cancelled = len(open_orders)
-            note = f" _(+{cancelled} order{'s' if cancelled != 1 else ''} cancelled)_" if cancelled else ""
+            client.close_position(alpaca_sym)
+
+            db_positions = get_open_pos(sym)
+            if db_positions:
+                pnl = sum(close_pos(pos["id"], exit_price, "manual_close") for pos in db_positions)
+            else:
+                mult = 1 if direction == "long" else -1
+                pnl  = round((exit_price - entry_price) * shares * mult, 2)
+
+            note = f" _(+{len(open_orders)} orders cancelled)_" if open_orders else ""
             closed.append(f"`{sym}` P&L: `{'+'if pnl>=0 else ''}${pnl:.2f}`{note}")
         except Exception as e:
             closed.append(f"`{sym}` ❌ {e}")

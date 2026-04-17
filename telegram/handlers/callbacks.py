@@ -51,8 +51,6 @@ from handlers.algo003 import (
     handle_algo003_setup_pairs,
     handle_algo003_ask_threshold,
     handle_algo003_ask_daily,
-    handle_algo003_positions,
-    handle_algo003_reports,
     handle_algo003_close_all,
 )
 
@@ -184,12 +182,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     elif data == "algo003_ask_daily":
         await handle_algo003_ask_daily(update, context)
-
-    elif data == "algo003_positions":
-        await handle_algo003_positions(update, context)
-
-    elif data == "algo003_reports":
-        await handle_algo003_reports(update, context)
 
     elif data == "algo003_close_all":
         await handle_algo003_close_all(update, context)

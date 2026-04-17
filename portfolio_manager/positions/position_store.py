@@ -327,3 +327,66 @@ def is_open(symbol: str, db_path: Path = _DEFAULT_DB) -> bool:
             (symbol,),
         ).fetchone()
     return row is not None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ALGO_003 — SMA Crossover (write-on-close helper)
+# ═════════════════════════════════════════════════════════════════════════════
+
+_CREATE_SQL_003 = """
+CREATE TABLE IF NOT EXISTS algo_003_positions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol       TEXT    NOT NULL,
+    direction    TEXT    NOT NULL,
+    entry_date   TEXT    NOT NULL,
+    entry_price  REAL    NOT NULL,
+    shares       REAL    NOT NULL,
+    notional     REAL    NOT NULL,
+    order_id     TEXT,
+    status       TEXT    NOT NULL DEFAULT 'open',
+    exit_date    TEXT,
+    exit_price   REAL,
+    pnl          REAL,
+    exit_reason  TEXT
+);
+"""
+
+
+def init_table_003(db_path: Path = _DEFAULT_DB) -> None:
+    with _conn(db_path) as conn:
+        conn.execute(_CREATE_SQL_003)
+
+
+def insert_closed_position_003(
+    symbol:      str,
+    direction:   str,
+    entry_price: float,
+    exit_price:  float,
+    shares:      float,
+    notional:    float,
+    exit_reason: str,
+    order_id:    str | None = None,
+    entry_date:  str | None = None,
+    db_path:     Path = _DEFAULT_DB,
+) -> None:
+    """
+    INSERT a fully-closed ALGO_003 trade directly (no prior open record needed).
+
+    Used by TradingStream when it catches a fill for a symbol that has no
+    matching open DB record (e.g. after a bot restart).
+    """
+    init_table_003(db_path)
+    mult    = 1 if direction == "long" else -1
+    pnl     = round((exit_price - entry_price) * shares * mult, 2)
+    today   = date.today().isoformat()
+    with _conn(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO algo_003_positions
+                (symbol, direction, entry_date, entry_price, shares, notional,
+                 order_id, status, exit_date, exit_price, pnl, exit_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?)
+            """,
+            (symbol, direction, entry_date or today, entry_price, shares, notional,
+             order_id, today, exit_price, pnl, exit_reason),
+        )
