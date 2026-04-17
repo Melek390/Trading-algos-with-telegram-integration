@@ -35,16 +35,16 @@ if str(PROJECT_DIR) not in sys.path:
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Watchlist earnings check — runs after market close, checks all followed stocks
-WATCHLIST_UTC_HOUR   = 16
-WATCHLIST_UTC_MINUTE = 46
+WATCHLIST_UTC_HOUR   = 14
+WATCHLIST_UTC_MINUTE = 41
 
 # Daily portfolio status update — open positions snapshot sent to all active chats
-POSITIONS_UTC_HOUR   = 16
-POSITIONS_UTC_MINUTE = 47
+POSITIONS_UTC_HOUR   = 14
+POSITIONS_UTC_MINUTE = 42
 
 # ── Watchlist performance alert ────────────────────────────────────────────────
-WATCHLIST_PERF_UTC_HOUR      = 16
-WATCHLIST_PERF_UTC_MINUTE    = 48
+WATCHLIST_PERF_UTC_HOUR      = 14
+WATCHLIST_PERF_UTC_MINUTE    = 43
 WATCHLIST_GAIN_THRESHOLD_PCT = 1.0  # notify if stock is up > 1 % from add date
 
 
@@ -62,8 +62,8 @@ ALGOS: dict[str, dict] = {
         "signal":      False,        # handled by auto-refresh scheduler
         "tradeable":   True,         # auto-executes trade after pipeline refresh
         "schedulable": True,
-        "sched_utc_hour":   16,
-        "sched_utc_minute": 42,
+        "sched_utc_hour":   14,
+        "sched_utc_minute": 37,
     },
     "002": {
         "name":        "ALGO_002 — Revenue Beat Explosion",
@@ -77,8 +77,8 @@ ALGOS: dict[str, dict] = {
         "signal":      False,        # handled by auto-refresh scheduler
         "tradeable":   True,         # scheduler executes trades automatically
         "schedulable": True,
-        "sched_utc_hour":   16,
-        "sched_utc_minute": 44,
+        "sched_utc_hour":   14,
+        "sched_utc_minute": 39,
     },
     "003": {
         "name":        "ALGO_003 — SMA Crossover",
