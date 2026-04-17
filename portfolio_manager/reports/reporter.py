@@ -372,6 +372,20 @@ def get_report_csv(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> by
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _open_algo003_symbols(db_path: Path = _DEFAULT_DB) -> set[str]:
+    """Return the set of symbols that currently have open records in algo_003_positions."""
+    if not db_path.exists():
+        return set()
+    try:
+        with _conn(db_path) as conn:
+            rows = conn.execute(
+                "SELECT symbol FROM algo_003_positions WHERE status = 'open'"
+            ).fetchall()
+        return {r["symbol"] for r in rows}
+    except Exception:
+        return set()
+
+
 def get_report(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> str:
     """Generate a Markdown performance report. period: 'weekly' | 'monthly' | 'yearly'."""
     period_label = {"weekly": "Weekly", "monthly": "Monthly", "yearly": "Yearly"}.get(period, period.capitalize())
@@ -417,13 +431,23 @@ def get_report(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> str:
         else:
             parts += ["_No open position in Alpaca._"]
     else:
-        # ALGO_002/003: 100% Alpaca — position list, prices, and entry dates all from Alpaca.
-        # DB is never consulted for open positions display.
-        alpaca_map = _alpaca_positions_map()
-        algo_positions = {
-            sym: ap for sym, ap in alpaca_map.items()
-            if sym not in _ALGO_001_SYMBOLS
-        }
+        # ALGO_002/003: prices from Alpaca; filter positions by algo ownership via DB.
+        alpaca_map   = _alpaca_positions_map()
+        algo003_syms = _open_algo003_symbols(db_path)
+
+        if algo_id == "003":
+            # Only show symbols that have open records in algo_003_positions
+            algo_positions = {
+                sym: ap for sym, ap in alpaca_map.items()
+                if sym in algo003_syms
+            }
+        else:
+            # ALGO_002: exclude ALGO_001 symbols and any ALGO_003-owned positions
+            algo_positions = {
+                sym: ap for sym, ap in alpaca_map.items()
+                if sym not in _ALGO_001_SYMBOLS and sym not in algo003_syms
+            }
+
         if algo_positions:
             entry_dates = _alpaca_entry_dates(list(algo_positions.keys()))
             parts += ["*Open Positions:*"]
