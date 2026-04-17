@@ -156,6 +156,33 @@ def start_trade_stream(app) -> None:
             logger.warning("trade_stream: error in on_trade_update: %s", e)
 
     def _run():
+        import asyncio as _asyncio
+
+        # Patch _start_ws to add exponential backoff between reconnect attempts.
+        # The Alpaca SDK's _run_forever() retries instantly on any error which
+        # floods logs at ~15ms/attempt when the network is down.
+        _orig_start_ws = stream._start_ws
+        _attempt       = [0]
+
+        async def _start_ws_with_backoff():
+            _attempt[0] += 1
+            if _attempt[0] > 1:
+                # 5s → 10s → 20s → 40s → … → 300s max
+                wait = min(5 * (2 ** min(_attempt[0] - 2, 6)), 300)
+                logger.warning(
+                    "trade_stream: reconnect attempt %d — waiting %ds before retry",
+                    _attempt[0], wait,
+                )
+                await _asyncio.sleep(wait)
+            try:
+                result = await _orig_start_ws()
+                _attempt[0] = 0  # reset counter on successful connect
+                return result
+            except Exception:
+                raise
+
+        stream._start_ws = _start_ws_with_backoff
+
         try:
             stream.run()
         except Exception as e:
