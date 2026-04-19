@@ -407,10 +407,6 @@ def run_algo_002(ctx: _Ctx, conn: sqlite3.Connection, batch_size: int = 100) -> 
         return
 
     _ensure_table(conn, "algo_002", ALGO_002_FEATURES)
-    # Replace old data — universe is dynamic, previous snapshot is stale
-    conn.execute("DELETE FROM algo_002")
-    conn.commit()
-    logger.info("  algo_002: cleared old snapshot rows")
     total_batches = math.ceil(total / batch_size)
 
     for i in range(0, total, batch_size):
