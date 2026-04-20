@@ -14,22 +14,24 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 
-def _execute_sync(algo_id: str):
+def _execute_sync(algo_id: str, per_position_notional: float | None = None):
     """Synchronous dispatch to the correct trader."""
     if algo_id == "001":
         from portfolio_manager.trader.algo001_trader import execute
         return execute()
     elif algo_id == "002":
         from portfolio_manager.trader.algo002_trader import execute
-        return execute()
+        return execute(per_position_notional=per_position_notional)
     else:
         raise ValueError(f"Unknown algo_id: {algo_id}")
 
 
-async def execute_trade(algo_id: str):
+async def execute_trade(algo_id: str, per_position_notional: float | None = None):
     """Async wrapper — runs synchronous trader in a thread pool."""
+    import functools
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _execute_sync, algo_id)
+    fn   = functools.partial(_execute_sync, algo_id, per_position_notional)
+    return await loop.run_in_executor(None, fn)
 
 
 def _close_all_sync(algo_id: str) -> dict:

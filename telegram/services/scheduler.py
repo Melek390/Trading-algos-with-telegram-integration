@@ -308,40 +308,97 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
                     msg += "_Signal unavailable._\n\n"
 
             # ── Step 3: Execute trade (any tradeable algo) ──────────────────────
-            _trade_result = None
+            _trade_result  = None
+            _ask_for_size  = False
+            _qualified_ask = []
             if success and info.get("tradeable"):
-                try:
-                    from services.trade import execute_trade, format_trade_result
-                    _trade_result = await execute_trade(algo_id)
-                    msg += format_trade_result(_trade_result, algo_id)
-                    if algo_id == "001":
-                        logger.info(
-                            "ALGO_001 auto-trade: action=%s target=%s",
-                            _trade_result.action, _trade_result.target,
+                if algo_id == "002":
+                    # Preview qualified stocks first — ask user for position size
+                    try:
+                        from portfolio_manager.trader.algo002_trader import preview_entries
+                        _loop = asyncio.get_event_loop()
+                        gate_passed, gate_msg, qualified, near_misses = await _loop.run_in_executor(
+                            None, preview_entries,
                         )
-                    else:
-                        logger.info(
-                            "ALGO_%s auto-trade: %d entries  %d exits",
-                            algo_id,
-                            len(getattr(_trade_result, "entries", [])),
-                            len(getattr(_trade_result, "exits", [])),
+                        if gate_passed and qualified:
+                            _ask_for_size  = True
+                            _qualified_ask = qualified
+                            app.bot_data["algo002_pending_notional"] = {
+                                "chat_id":     chat_id,
+                                "near_misses": near_misses,
+                            }
+                            msg += f"📊 {gate_msg}\n"
+                        else:
+                            # Gate failed or no entries — run exits + monitoring as usual
+                            from services.trade import execute_trade, format_trade_result
+                            _trade_result = await execute_trade(algo_id)
+                            msg += format_trade_result(_trade_result, algo_id)
+                    except Exception:
+                        logger.warning("algo002 preview_entries failed — auto-executing", exc_info=True)
+                        try:
+                            from services.trade import execute_trade, format_trade_result
+                            _trade_result = await execute_trade(algo_id)
+                            msg += format_trade_result(_trade_result, algo_id)
+                        except Exception:
+                            msg += "❌ *Trade execution failed* — check logs."
+                else:
+                    try:
+                        from services.trade import execute_trade, format_trade_result
+                        _trade_result = await execute_trade(algo_id)
+                        msg += format_trade_result(_trade_result, algo_id)
+                        if algo_id == "001":
+                            logger.info(
+                                "ALGO_001 auto-trade: action=%s target=%s",
+                                _trade_result.action, _trade_result.target,
+                            )
+                        else:
+                            logger.info(
+                                "ALGO_%s auto-trade: %d entries  %d exits",
+                                algo_id,
+                                len(getattr(_trade_result, "entries", [])),
+                                len(getattr(_trade_result, "exits", [])),
+                            )
+                    except Exception:
+                        logger.warning(
+                            "execute_trade('%s') failed after auto-refresh", algo_id, exc_info=True,
                         )
-                except Exception:
-                    logger.warning(
-                        "execute_trade('%s') failed after auto-refresh", algo_id, exc_info=True,
-                    )
-                    msg += "❌ *Trade execution failed* — check logs."
+                        msg += "❌ *Trade execution failed* — check logs."
 
             # ── Build keyboard (+ watchlist buttons for ALGO_002 near-misses) ──
             button_rows = []
 
+            if algo_id == "002" and _ask_for_size:
+                # Pipeline result already in msg — send it, then ask for position size
+                await app.bot.send_message(
+                    chat_id=chat_id,
+                    text=msg,
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("« Back to Menu", callback_data="back_main")
+                    ]]),
+                )
+                syms_str = "  ".join(f"`{sym}`" for sym, *_ in _qualified_ask[:3])
+                extra    = f"\n_…and {len(_qualified_ask) - 3} more_" if len(_qualified_ask) > 3 else ""
+                ask_msg  = (
+                    f"🎯 *ALGO\\_002 — Entry Signal*\n\n"
+                    f"*Qualified:* {syms_str}{extra}\n\n"
+                    f"💬 *Reply with position size per trade in $*\n"
+                    f"_e.g._ `500`\n\n"
+                    f"_Tap Skip to pass this cycle._"
+                )
+                await app.bot.send_message(
+                    chat_id=chat_id,
+                    text=ask_msg,
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("⏭ Skip this cycle", callback_data="algo002_skip_entry")
+                    ]]),
+                )
+                continue  # wait for user reply — MessageHandler will execute the trade
+
             if algo_id == "002" and _trade_result is not None:
-                # Qualified stocks not entered this cycle (slots=1 limit)
                 qualified   = getattr(_trade_result, "qualified",   None) or []
                 near_misses = getattr(_trade_result, "near_misses", None) or []
-
-                # Merge: qualified first (fully pass conditions), then near-misses
-                # Deduplicate and cap at 6 buttons total (2 rows of 3)
                 seen: set[str] = set()
                 watchlist_candidates = []
                 for item in qualified + near_misses:
@@ -351,9 +408,7 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
                         watchlist_candidates.append(item)
                     if len(watchlist_candidates) == 6:
                         break
-
                 if watchlist_candidates:
-                    # Cache metadata for handle_cal_follow
                     app.bot_data["algo002_near_misses"] = {
                         sym: {
                             "conditions_met":   n_cond,
@@ -362,7 +417,6 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
                         }
                         for sym, _, n_cond, row in watchlist_candidates
                     }
-                    # Split into rows of 3
                     for i in range(0, len(watchlist_candidates), 3):
                         chunk = watchlist_candidates[i:i+3]
                         button_rows.append([

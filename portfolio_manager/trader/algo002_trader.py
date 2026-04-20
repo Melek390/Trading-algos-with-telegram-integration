@@ -66,7 +66,53 @@ def _get_last_price(sym: str) -> float | None:
         return None
 
 
-def execute(db_path: Path = _DEFAULT_DB) -> MultiTradeResult:
+def preview_entries(db_path: Path = _DEFAULT_DB) -> tuple:
+    """
+    Check gate conditions and return qualified candidates without placing any orders.
+    Returns (gate_passed, gate_msg, qualified, near_misses).
+    qualified: [(sym, score, n_cond, row), ...]
+    """
+    try:
+        signal = get_signal(top_n=_MAX_POSITIONS, db_path=db_path)
+    except (FileNotFoundError, RuntimeError) as e:
+        return False, f"Signal unavailable: {e}", [], []
+
+    vix_str = f"{signal.vix:.1f}" if signal.vix is not None else "N/A"
+    iwm_str = f"{signal.iwm_ret:.2f}%" if signal.iwm_ret is not None else "N/A"
+    gate_msg = (
+        f"VIX={vix_str} | IWM 20d={iwm_str} | "
+        f"{signal.n_total} stocks | {signal.n_qualified} qualified"
+    )
+
+    if not signal.gate_passed:
+        return False, gate_msg, [], signal.near_misses
+
+    try:
+        client = get_trading_client()
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        alpaca_held    = {p.symbol for p in client.get_all_positions()}
+        alpaca_pending = {
+            o.symbol for o in client.get_orders(
+                GetOrdersRequest(status=QueryOrderStatus.OPEN)
+            )
+        }
+        blocked = alpaca_held | alpaca_pending
+    except Exception:
+        blocked = set()
+
+    current_open = len(get_open_positions(db_path))
+    slots        = max(0, _MAX_POSITIONS - current_open)
+    qualified    = [
+        (sym, score, n_cond, row)
+        for sym, score, n_cond, row in signal.candidates
+        if passes_conditions(row) and not is_open(sym, db_path) and sym not in blocked
+    ][:slots]
+
+    return True, gate_msg, qualified, signal.near_misses
+
+
+def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT_DB) -> MultiTradeResult:
     """Full ALGO_002 trade cycle. Returns a MultiTradeResult."""
     result = MultiTradeResult()
 
@@ -125,9 +171,12 @@ def execute(db_path: Path = _DEFAULT_DB) -> MultiTradeResult:
 
         if all_qualified and slots > 0:
             try:
-                total_capital    = get_algo_capital("002")
-                max_per_position = round(total_capital * 0.30, 2)   # hard cap: 30% of capital per position
-                per_position     = round(min(total_capital, max_per_position), 2)
+                if per_position_notional is not None:
+                    per_position = round(per_position_notional, 2)
+                else:
+                    total_capital    = get_algo_capital("002")
+                    max_per_position = round(total_capital * 0.30, 2)
+                    per_position     = round(min(total_capital, max_per_position), 2)
             except Exception as e:
                 result.error = f"Capital manager error: {e}"
                 return result

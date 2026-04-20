@@ -312,13 +312,48 @@ async def handle_algo003_close_all(update: Update, context: ContextTypes.DEFAULT
 # ── Text input handler (registered as MessageHandler in bot.py) ───────────────
 
 async def handle_algo003_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Captures free-text replies for ALGO_003 config."""
+    """Captures free-text replies: ALGO_002 position size + ALGO_003 config inputs."""
+    chat_id = update.effective_chat.id
+    text    = (update.message.text or "").strip()
+
+    # ── ALGO_002 position size reply ──────────────────────────────────────────
+    pending = context.bot_data.get("algo002_pending_notional")
+    if pending and chat_id == pending.get("chat_id"):
+        try:
+            notional = float(text.replace("$", "").replace(",", ""))
+            if notional <= 0:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text(
+                "⚠️ Enter a valid dollar amount \\(e\\.g\\. `500`\\), or tap *Skip* to pass\\.",
+                parse_mode="MarkdownV2",
+            )
+            return
+
+        context.bot_data.pop("algo002_pending_notional", None)
+        await update.message.reply_text(
+            f"⏳ Executing ALGO\\_002 with `${notional:,.0f}` per position\\.\\.\\.",
+            parse_mode="MarkdownV2",
+        )
+        try:
+            from services.trade import execute_trade, format_trade_result
+            result = await execute_trade("002", per_position_notional=notional)
+            msg    = format_trade_result(result, "002")
+        except Exception as e:
+            msg = f"❌ Trade execution failed:\n`{e}`"
+
+        await update.message.reply_text(
+            msg, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Back to Menu", callback_data="back_main")
+            ]]),
+        )
+        return
+
+    # ── ALGO_003 config inputs ────────────────────────────────────────────────
     awaiting = context.user_data.get("algo003_awaiting")
     if not awaiting:
         return
-
-    chat_id = update.effective_chat.id
-    text    = (update.message.text or "").strip()
 
     # ── Guided pair+lot-size setup ────────────────────────────────────────────
     if awaiting == "pair_ticker":

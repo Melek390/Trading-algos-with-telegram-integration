@@ -75,10 +75,10 @@ ALGOS: dict[str, dict] = {
         "table":       "algo_002",
         "flag":        "--algo-002",
         "signal":      False,        # handled by auto-refresh scheduler
-        "tradeable":   True,         # scheduler executes trades automatically
+        "tradeable":   True,         # scheduler asks user for size then executes
         "schedulable": True,
-        "sched_utc_hour":   14,
-        "sched_utc_minute": 39,
+        "sched_utc_hour":   18,      # 7 PM Tunisia (UTC+1)
+        "sched_utc_minute":  0,
     },
     "003": {
         "name":        "ALGO_003 — SMA Crossover",
