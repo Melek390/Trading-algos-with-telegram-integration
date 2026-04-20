@@ -110,22 +110,23 @@ def start_trade_stream(app) -> None:
                 return
 
             # ── ALGO_003 market sell (SMA exit / profit threshold / manual) ──────
+            # Only route to ALGO_003 if the symbol is actually in the ALGO_003 cache.
+            # Crypto symbols (BTCUSD, ETHUSD, …) are always ALGO_003.
+            # Stock market-sells that don't hit the ALGO_003 cache fall through to the
+            # ALGO_002 bracket block below (e.g. manual close_all or time_exit).
+            _CRYPTO_BASES_TS = {
+                "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA",
+                "MATIC", "LINK", "UNI", "LTC", "AVAX",
+            }
+            _is_crypto_sym = any(
+                symbol.startswith(b) and symbol.endswith("USD")
+                for b in _CRYPTO_BASES_TS
+            )
+            cache_sym = (symbol[:-3] + "/USD") if _is_crypto_sym else symbol
+
             if otype == "market" and symbol not in _ALGO_001_SYMBOLS:
                 try:
                     from portfolio_manager.trader.algo003_trader import get_open_pos, close_pos
-
-                    # Convert Alpaca symbol back to cache key (BTCUSD → BTC/USD)
-                    _CRYPTO_BASES = {
-                        "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA",
-                        "MATIC", "LINK", "UNI", "LTC", "AVAX",
-                    }
-                    cache_sym = (
-                        symbol[:-3] + "/USD"
-                        if any(symbol.startswith(b) and symbol.endswith("USD")
-                               for b in _CRYPTO_BASES)
-                        else symbol
-                    )
-
                     db_003 = get_open_pos(cache_sym)
                     if db_003:
                         pos             = db_003[0]
@@ -146,9 +147,13 @@ def start_trade_stream(app) -> None:
                             symbol, fill_price or 0, pnl_str,
                         )
                         asyncio.run_coroutine_threadsafe(_notify(app, msg), main_loop)
+                        return   # handled — don't fall through
                 except Exception as e:
                     logger.warning("trade_stream: ALGO_003 market exit error for %s: %s", symbol, e)
-                return
+
+                # Crypto with no cache entry: nothing to do (orphaned position)
+                if _is_crypto_sym:
+                    return
 
             # ── ALGO_002 bracket TP / SL ─────────────────────────────────────────
             if otype == "limit":

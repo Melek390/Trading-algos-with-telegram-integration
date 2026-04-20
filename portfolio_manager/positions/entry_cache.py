@@ -125,22 +125,14 @@ def restore_from_alpaca() -> int:
         positions = client.get_all_positions()
         restored  = 0
 
-        # Detect which non-ALGO_001 symbols have open bracket legs (TP/SL) → ALGO_002
-        try:
-            open_orders = client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
-            bracket_symbols: set[str] = {
-                o.symbol for o in open_orders
-                if str(o.type).lower() in ("limit", "stop", "stop_limit")
-            }
-        except Exception:
-            bracket_symbols = set()
 
         for pos in positions:
             sym = pos.symbol
             if sym in _ALGO_001_SYMBOLS:
                 continue
 
-            # Determine canonical cache key and algo
+            # Determine canonical cache key and algo.
+            # ALGO_003 only ever trades crypto; all stock positions are ALGO_002.
             is_crypto = any(
                 sym.startswith(b) and sym.endswith("USD")
                 for b in _CRYPTO_BASES
@@ -150,7 +142,7 @@ def restore_from_alpaca() -> int:
             if cache_sym in _cache:
                 continue
 
-            algo = "003" if (is_crypto or sym not in bracket_symbols) else "002"
+            algo = "003" if is_crypto else "002"
 
             # Fallback entry data from Alpaca position
             entry_price = float(pos.avg_entry_price)
