@@ -60,8 +60,8 @@ def _date_range(period: str) -> tuple[str, str]:
     """
     today = date.today()
     if period == "weekly":
-        # weekday() returns 0 for Monday -- subtract to land on this week's Monday
-        start = today - timedelta(days=today.weekday())
+        # Always show a rolling 7-day window so Monday doesn't collapse to 1 point
+        start = today - timedelta(days=6)
     elif period == "monthly":
         start = today.replace(day=1)
     else:  # yearly
@@ -638,15 +638,22 @@ def get_report_chart(algo_id: str, period: str = "monthly", db_path: Path = _DEF
         ax.plot(xs, y_vals, color=color, linewidth=2, marker="o",
                 markersize=4, zorder=3)
 
-        # Zero baseline — move x-axis spine to y=0
-        ax.axhline(0, color="#8888aa", linewidth=1.0, linestyle="-", zorder=2)
-        ax.spines["bottom"].set_position(("data", 0))
-
-        # Expand y limits so bars below 0 are visible
+        # Expand y limits first so we know if 0 is inside the range
         y_min = min(y_vals)
         y_max = max(y_vals)
         margin = max(abs(y_max), abs(y_min)) * 0.15 or 2
-        ax.set_ylim(y_min - margin, y_max + margin)
+        y_lo = y_min - margin
+        y_hi = y_max + margin
+        # Ensure y=0 is always visible as a baseline
+        y_lo = min(y_lo, -margin)
+        y_hi = max(y_hi, margin)
+        ax.set_ylim(y_lo, y_hi)
+
+        # Zero baseline
+        ax.axhline(0, color="#8888aa", linewidth=1.0, linestyle="-", zorder=2)
+        # Only move x-axis spine to y=0 when 0 is inside the data range
+        if y_lo <= 0 <= y_hi:
+            ax.spines["bottom"].set_position(("data", 0))
 
         # X-axis ticks — skip labels when too many points
         step = max(1, len(x_labels) // 20)
