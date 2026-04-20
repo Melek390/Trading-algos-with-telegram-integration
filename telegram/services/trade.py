@@ -90,9 +90,10 @@ def _close_all_sync(algo_id: str) -> dict:
     elif algo_id == "002":
         from alpaca.trading.enums import QueryOrderStatus
         from alpaca.trading.requests import GetOrdersRequest
-        from portfolio_manager.positions.position_store import close_position, get_open_positions
+        from portfolio_manager.positions.entry_cache import get_algo_open_positions, get_entry, remove_entry
+        from portfolio_manager.positions.position_store import insert_closed_position_002
 
-        db_positions = {p["symbol"]: p for p in get_open_positions()}
+        db_positions = {p["symbol"]: p for p in get_algo_open_positions("002")}
         alpaca_map   = {p.symbol: p for p in client.get_all_positions()}
         all_open_orders = []
         try:
@@ -130,11 +131,21 @@ def _close_all_sync(algo_id: str) -> dict:
             if orders_pending_cancel:
                 sym_errors.append("bracket orders still cancelling — Alpaca will self-close once done")
 
-            # Step 3: mark DB closed if a record exists
+            # Step 3: write closed record to DB if position was in cache
             db_pos = db_positions.get(sym)
             if db_pos:
                 try:
-                    close_position(db_pos["id"], exit_price, "manual_close")
+                    insert_closed_position_002(
+                        symbol      = sym,
+                        entry_price = db_pos["entry_price"],
+                        exit_price  = exit_price,
+                        shares      = db_pos.get("shares", 0),
+                        notional    = db_pos.get("notional", 0),
+                        exit_reason = "manual_close",
+                        order_id    = db_pos.get("order_id"),
+                        entry_date  = db_pos.get("entry_date"),
+                    )
+                    remove_entry(sym)
                 except Exception as e:
                     sym_errors.append(f"db update: {e}")
 

@@ -167,50 +167,54 @@ def _conn(db_path: Path = _DEFAULT_DB) -> sqlite3.Connection:
 
 
 def open_pos(symbol: str, direction: str, entry_price: float, shares: float,
-             notional: float, order_id: str | None, db_path=_DEFAULT_DB) -> int:
-    with _conn(db_path) as conn:
-        cur = conn.execute(
-            """INSERT INTO algo_003_positions
-               (symbol, direction, entry_date, entry_price, shares, notional, order_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (symbol, direction, date.today().isoformat(),
-             entry_price, shares, notional, order_id),
-        )
-        return cur.lastrowid
+             notional: float, order_id: str | None, db_path=_DEFAULT_DB) -> None:
+    """Register an open position in the in-memory entry cache (no DB write)."""
+    from portfolio_manager.positions.entry_cache import cache_entry
+    cache_entry(
+        symbol=symbol, algo_id="003", direction=direction,
+        entry_price=entry_price, shares=shares, notional=notional,
+        order_id=order_id,
+    )
 
 
-def close_pos(row_id: int, exit_price: float, exit_reason: str = "signal",
+def close_pos(symbol: str, exit_price: float, exit_reason: str = "signal",
               db_path=_DEFAULT_DB) -> float:
-    with _conn(db_path) as conn:
-        row = conn.execute(
-            "SELECT entry_price, shares, direction FROM algo_003_positions WHERE id=?",
-            (row_id,)
-        ).fetchone()
-        if not row:
-            return 0.0
-        mult = 1 if row["direction"] == "long" else -1
-        pnl  = round((exit_price - row["entry_price"]) * row["shares"] * mult, 2)
-        conn.execute(
-            """UPDATE algo_003_positions
-               SET status='closed', exit_date=?, exit_price=?, pnl=?, exit_reason=?
-               WHERE id=?""",
-            (date.today().isoformat(), exit_price, pnl, exit_reason, row_id),
-        )
-        return pnl
+    """Write a closed record to DB and remove from entry cache. Returns realised PnL."""
+    from portfolio_manager.positions.entry_cache import get_entry, remove_entry
+    from portfolio_manager.positions.position_store import insert_closed_position_003
+
+    entry = get_entry(symbol)
+    if not entry:
+        return 0.0
+    mult = 1 if entry["direction"] == "long" else -1
+    pnl  = round((exit_price - entry["entry_price"]) * entry["shares"] * mult, 2)
+    insert_closed_position_003(
+        symbol=symbol,
+        direction=entry["direction"],
+        entry_price=entry["entry_price"],
+        exit_price=exit_price,
+        shares=entry["shares"],
+        notional=entry["notional"],
+        exit_reason=exit_reason,
+        order_id=entry.get("order_id"),
+        entry_date=entry.get("entry_date"),
+        db_path=db_path,
+    )
+    remove_entry(symbol)
+    return pnl
 
 
 def get_open_pos(symbol: str | None = None, db_path=_DEFAULT_DB) -> list[dict]:
-    with _conn(db_path) as conn:
-        if symbol:
-            rows = conn.execute(
-                "SELECT * FROM algo_003_positions WHERE status='open' AND symbol=?",
-                (symbol,)
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM algo_003_positions WHERE status='open'"
-            ).fetchall()
-        return [dict(r) for r in rows]
+    """Return open positions from the in-memory entry cache."""
+    from portfolio_manager.positions.entry_cache import get_algo_entries
+    entries = get_algo_entries("003")
+    if symbol:
+        return [
+            {"symbol": s, **e}
+            for s, e in entries.items()
+            if s == symbol
+        ]
+    return [{"symbol": s, **e} for s, e in entries.items()]
 
 
 def get_daily_pnl(db_path=_DEFAULT_DB) -> float:
@@ -297,7 +301,7 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
                 client.close_position(key)
 
             ep   = float(ap[key].current_price) if key in ap else pos["entry_price"]
-            pnl  = close_pos(pos["id"], ep, "sma_exit", db_path)
+            pnl  = close_pos(symbol, ep, "sma_exit", db_path)
             result.exits.append({"symbol": symbol, "pnl": pnl, "reason": "sma_exit"})
             logger.info("algo003: EXIT %s direction=%s pnl=%.2f", symbol, pos["direction"], pnl)
         except Exception as e:
@@ -355,14 +359,13 @@ def run_sma_cycle(symbol: str, cfg: dict, db_path=_DEFAULT_DB) -> CycleResult:
                     time_in_force=TimeInForce.DAY,  # required for notional orders
                 ))
 
-            row_id = open_pos(symbol, direction, price, qty, notional, str(order.id), db_path)
+            open_pos(symbol, direction, price, qty, notional, str(order.id), db_path)
             result.entries.append({
                 "symbol":    symbol,
                 "direction": direction,
                 "qty":       qty,
                 "price":     price,
                 "order_id":  str(order.id),
-                "row_id":    row_id,
             })
             logger.info("algo003: ENTER %s %s qty=%.6f price=%.4f", direction.upper(), symbol, qty, price)
 
@@ -435,7 +438,7 @@ def check_profit_threshold(cfg: dict, db_path=_DEFAULT_DB) -> list[dict]:
             if unrealized >= threshold:
                 try:
                     client.close_position(alpaca_sym)
-                    pnl = close_pos(pos["id"], cur_price, "profit_threshold", db_path)
+                    pnl = close_pos(sym, cur_price, "profit_threshold", db_path)
                     closed.append({"symbol": sym, "pnl": pnl, "unrealized": unrealized})
                     logger.info("algo003: threshold hit %s unrealized=%.2f pnl=%.2f", sym, unrealized, pnl)
                 except Exception as e:
@@ -464,7 +467,7 @@ def _close_all_for_symbol(symbol: str, client, db_path: Path, is_crypto: bool) -
             ep = float(ap[alpaca_sym].current_price) if alpaca_sym in ap else pos["entry_price"]
         except Exception:
             ep = pos["entry_price"]
-        pnl = close_pos(pos["id"], ep, "signal_switch", db_path)
+        pnl = close_pos(symbol, ep, "signal_switch", db_path)
         closed.append({"symbol": symbol, "pnl": pnl, "reason": "signal_switch"})
     return closed
 

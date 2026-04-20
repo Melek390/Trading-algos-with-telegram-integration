@@ -372,16 +372,16 @@ def get_report_csv(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> by
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def _open_algo003_symbols(db_path: Path = _DEFAULT_DB) -> set[str]:
-    """Return the set of symbols that currently have open records in algo_003_positions."""
-    if not db_path.exists():
-        return set()
+def _open_algo003_symbols() -> set[str]:
+    """
+    Return the set of Alpaca-format symbols currently open under ALGO_003.
+    Reads from the in-memory entry cache — no DB query needed.
+    Crypto: BTC/USD → BTCUSD (matches Alpaca position keys).
+    """
     try:
-        with _conn(db_path) as conn:
-            rows = conn.execute(
-                "SELECT symbol FROM algo_003_positions WHERE status = 'open'"
-            ).fetchall()
-        return {r["symbol"] for r in rows}
+        from portfolio_manager.positions.entry_cache import get_algo_entries
+        entries = get_algo_entries("003")
+        return {s.replace("/", "") for s in entries}
     except Exception:
         return set()
 
@@ -433,7 +433,7 @@ def get_report(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> str:
     else:
         # ALGO_002/003: prices from Alpaca; filter positions by algo ownership via DB.
         alpaca_map   = _alpaca_positions_map()
-        algo003_syms = _open_algo003_symbols(db_path)
+        algo003_syms = _open_algo003_symbols()
 
         if algo_id == "003":
             # Only show symbols that have open records in algo_003_positions
@@ -610,7 +610,7 @@ def get_report_chart(algo_id: str, period: str = "monthly", db_path: Path = _DEF
         y_vals.append(round(cumul, 2))
 
     # ── Plot ─────────────────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(11, 5))
+    fig, ax = plt.subplots(figsize=(16, 7))
     fig.patch.set_facecolor("#1a1a2e")
     ax.set_facecolor("#16213e")
     ax.tick_params(colors="#cccccc", labelsize=8)
@@ -670,7 +670,7 @@ def get_report_chart(algo_id: str, period: str = "monthly", db_path: Path = _DEF
 
     fig.tight_layout(pad=2.0)
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+    plt.savefig(buf, format="png", dpi=180, bbox_inches="tight",
                 facecolor=fig.get_facecolor())
     plt.close(fig)
     buf.seek(0)

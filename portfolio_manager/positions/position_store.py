@@ -357,6 +357,51 @@ def init_table_003(db_path: Path = _DEFAULT_DB) -> None:
         conn.execute(_CREATE_SQL_003)
 
 
+def insert_closed_position_002(
+    symbol:      str,
+    entry_price: float,
+    exit_price:  float | None,
+    shares:      float,
+    notional:    float,
+    exit_reason: str,
+    order_id:    str | None = None,
+    entry_date:  str | None = None,
+    db_path:     Path = _DEFAULT_DB,
+) -> None:
+    """
+    INSERT a fully-closed ALGO_002 trade directly (no prior open record needed).
+
+    Used by TradingStream / monitoring cycle under the write-only-on-close
+    architecture where no open record is written at entry time.
+    """
+    init_table_002(db_path)
+    pnl_pct = None
+    if entry_price and exit_price:
+        pnl_pct = round((exit_price - entry_price) / entry_price * 100, 4)
+    today = date.today().isoformat()
+    with _conn(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO algo_002_positions
+                (symbol, entry_date, entry_price, shares, notional, status,
+                 exit_date, exit_price, exit_reason, pnl_pct, order_id)
+            VALUES (?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?)
+            """,
+            (
+                symbol,
+                entry_date or today,
+                entry_price,
+                shares,
+                notional,
+                today,
+                exit_price,
+                exit_reason,
+                pnl_pct,
+                order_id,
+            ),
+        )
+
+
 def insert_closed_position_003(
     symbol:      str,
     direction:   str,

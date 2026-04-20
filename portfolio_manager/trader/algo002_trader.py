@@ -29,11 +29,11 @@ from portfolio_manager.positions.position_monitor import (
     passes_conditions,
     run_monitoring_cycle,
 )
-from portfolio_manager.positions.position_store import (
-    _DEFAULT_DB,
-    get_open_positions,
-    is_open,
-    open_position,
+from portfolio_manager.positions.position_store import _DEFAULT_DB
+from portfolio_manager.positions.entry_cache import (
+    cache_entry,
+    get_algo_open_positions,
+    is_open_in_cache,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,12 +101,12 @@ def preview_entries(db_path: Path = _DEFAULT_DB) -> tuple:
     except Exception:
         blocked = set()
 
-    current_open = len(get_open_positions(db_path))
+    current_open = len(get_algo_open_positions("002"))
     slots        = max(0, _MAX_POSITIONS - current_open)
     qualified    = [
         (sym, score, n_cond, row)
         for sym, score, n_cond, row in signal.candidates
-        if passes_conditions(row) and not is_open(sym, db_path) and sym not in blocked
+        if passes_conditions(row) and not is_open_in_cache(sym, "002") and sym not in blocked
     ][:slots]
 
     return True, gate_msg, qualified, signal.near_misses
@@ -144,7 +144,7 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
 
     # ── 4. New entries (only if market gates passed) ───────────────────────────
     if signal.gate_passed:
-        current_open = len(get_open_positions(db_path))
+        current_open = len(get_algo_open_positions("002"))
         slots        = max(0, _MAX_POSITIONS - current_open)
 
         # Duplicate guard: block symbols already held or pending on Alpaca
@@ -164,7 +164,7 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
         all_qualified = [
             (sym, score, n_cond, row)
             for sym, score, n_cond, row in signal.candidates
-            if passes_conditions(row) and not is_open(sym, db_path) and sym not in blocked
+            if passes_conditions(row) and not is_open_in_cache(sym, "002") and sym not in blocked
         ]
         # result.qualified will be set inside the loop once we know which index succeeded
         result.qualified = []
@@ -219,13 +219,14 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
                         )
                     )
 
-                    open_position(
+                    cache_entry(
                         symbol      = sym,
+                        algo_id     = "002",
+                        direction   = "long",
                         entry_price = last_price,
                         shares      = qty,
                         notional    = per_position,
                         order_id    = str(order.id),
-                        db_path     = db_path,
                     )
                     result.entries.append({
                         "symbol":      sym,
@@ -266,7 +267,7 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
     # ── 5. Held-positions snapshot ─────────────────────────────────────────────
     try:
         alpaca_positions = {p.symbol: p for p in client.get_all_positions()}
-        for pos in get_open_positions(db_path):
+        for pos in get_algo_open_positions("002"):
             sym = pos["symbol"]
             ap  = alpaca_positions.get(sym)
             if ap:

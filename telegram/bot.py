@@ -82,6 +82,12 @@ async def _post_init(app) -> None:
     start_positions_updater(app)
     start_performance_checker(app)
     start_trade_stream(app)
+    try:
+        from portfolio_manager.positions.entry_cache import restore_from_alpaca
+        n = restore_from_alpaca()
+        logger.info("Entry cache restored: %d open positions from Alpaca", n)
+    except Exception:
+        logger.exception("Entry cache restore failed — cache starts empty")
     asyncio.create_task(_refresh_stale_earnings(app))
 
 

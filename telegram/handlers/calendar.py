@@ -494,13 +494,13 @@ async def handle_fl_buy_confirm(
 
     try:
         from portfolio_manager.client import get_trading_client
-        from portfolio_manager.positions.position_store import is_open, open_position
+        from portfolio_manager.positions.entry_cache import is_open_in_cache, cache_entry
         from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
         from alpaca.trading.requests import (
             MarketOrderRequest, StopLossRequest, TakeProfitRequest,
         )
 
-        if is_open(symbol):
+        if is_open_in_cache(symbol, "002"):
             await query.edit_message_text(
                 f"⚠️ `{symbol}` is already an open ALGO\\_002 position.",
                 parse_mode="Markdown", reply_markup=back_kb,
@@ -543,8 +543,10 @@ async def handle_fl_buy_confirm(
             )
         )
 
-        open_position(
+        cache_entry(
             symbol      = symbol,
+            algo_id     = "002",
+            direction   = "long",
             entry_price = last_price,
             shares      = float(qty),
             notional    = float(notional),

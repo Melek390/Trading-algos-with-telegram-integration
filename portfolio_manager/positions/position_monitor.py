@@ -20,10 +20,11 @@ from pathlib import Path
 from alpaca.trading.enums import QueryOrderStatus
 from alpaca.trading.requests import GetOrdersRequest
 
-from portfolio_manager.positions.position_store import (
-    close_position,
-    get_open_positions,
+from portfolio_manager.positions.entry_cache import (
+    get_algo_open_positions,
+    remove_entry,
 )
+from portfolio_manager.positions.position_store import insert_closed_position_002
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ def run_monitoring_cycle(
     list[dict] of positions closed this cycle, each containing:
         symbol, exit_reason, entry_price, exit_price, pnl_pct, days_held
     """
-    open_positions = get_open_positions(db_path)
+    open_positions = get_algo_open_positions("002")
     if not open_positions:
         return []
 
@@ -227,7 +228,6 @@ def run_monitoring_cycle(
                 continue
 
             # Query actual Alpaca bracket fill filtered to orders after our entry date
-            # No yfinance fallback — only Alpaca fill data is written to DB
             current_price, exit_reason = _get_bracket_exit(alpaca_client, sym, entry_date)
 
             logger.info(
@@ -235,12 +235,23 @@ def run_monitoring_cycle(
                 sym, exit_reason, f"{current_price:.2f}" if current_price else "None",
             )
 
-        # Record close in DB
+        # Write closed record to DB and remove from cache
         pnl_pct = None
         if current_price is not None:
             pnl_pct = round((current_price - entry_price) / entry_price * 100, 2)
 
-        close_position(pos["id"], current_price or entry_price, exit_reason, db_path)
+        insert_closed_position_002(
+            symbol      = sym,
+            entry_price = entry_price,
+            exit_price  = current_price or entry_price,
+            shares      = pos.get("shares", 0),
+            notional    = pos.get("notional", 0),
+            exit_reason = exit_reason,
+            order_id    = pos.get("order_id"),
+            entry_date  = pos.get("entry_date"),
+            db_path     = db_path,
+        )
+        remove_entry(sym)
         closed.append({
             "symbol":      sym,
             "exit_reason": exit_reason,

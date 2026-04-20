@@ -92,13 +92,13 @@ def start_trade_stream(app) -> None:
             if event != "fill":
                 return
 
-            # ── BUY fill: update DB entry_price to actual Alpaca fill ──────────
+            # ── BUY fill: update entry_price in cache to actual Alpaca fill ──────
             if side == "buy" and fill_price and order_id:
                 try:
-                    from portfolio_manager.positions.position_store import update_entry_price_002
-                    update_entry_price_002(order_id, fill_price)
+                    from portfolio_manager.positions.entry_cache import update_entry_price_by_order
+                    update_entry_price_by_order(order_id, fill_price)
                     logger.info(
-                        "trade_stream: %s buy fill — updated entry_price to %.4f",
+                        "trade_stream: %s buy fill — updated cache entry_price to %.4f",
                         symbol, fill_price,
                     )
                 except Exception as e:
@@ -113,16 +113,29 @@ def start_trade_stream(app) -> None:
             if otype == "market" and symbol not in _ALGO_001_SYMBOLS:
                 try:
                     from portfolio_manager.trader.algo003_trader import get_open_pos, close_pos
-                    db_003 = get_open_pos(symbol)
+
+                    # Convert Alpaca symbol back to cache key (BTCUSD → BTC/USD)
+                    _CRYPTO_BASES = {
+                        "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA",
+                        "MATIC", "LINK", "UNI", "LTC", "AVAX",
+                    }
+                    cache_sym = (
+                        symbol[:-3] + "/USD"
+                        if any(symbol.startswith(b) and symbol.endswith("USD")
+                               for b in _CRYPTO_BASES)
+                        else symbol
+                    )
+
+                    db_003 = get_open_pos(cache_sym)
                     if db_003:
-                        pos     = db_003[0]
-                        ep      = float(pos["entry_price"])
-                        mult    = 1 if pos["direction"] == "long" else -1
-                        pnl     = round((fill_price - ep) * pos["shares"] * mult, 2) if fill_price else None
-                        close_pos(pos["id"], fill_price or ep, "sma_exit")
+                        pos             = db_003[0]
+                        ep              = float(pos["entry_price"])
+                        mult            = 1 if pos["direction"] == "long" else -1
+                        pnl             = round((fill_price - ep) * pos["shares"] * mult, 2) if fill_price else None
+                        close_pos(cache_sym, fill_price or ep, "sma_exit")
                         direction_label = "Long" if pos["direction"] == "long" else "Short"
-                        fill_str = f"${fill_price:.4f}" if fill_price else "N/A"
-                        pnl_str  = f"{'+'if pnl>=0 else ''}${pnl:.2f}" if pnl is not None else "N/A"
+                        fill_str        = f"${fill_price:.4f}" if fill_price else "N/A"
+                        pnl_str         = f"{'+'if pnl>=0 else ''}${pnl:.2f}" if pnl is not None else "N/A"
                         msg = (
                             f"⚪ *ALGO\\_003 Exit*\n\n"
                             f"`{symbol}` {direction_label}  "
@@ -147,31 +160,83 @@ def start_trade_stream(app) -> None:
             else:
                 return
 
-            # Find the open ALGO_002 DB record for this symbol
-            from portfolio_manager.positions.position_store import (
-                get_open_positions, close_position,
-            )
-            db_pos = next(
-                (p for p in get_open_positions() if p["symbol"] == symbol),
-                None,
-            )
+            from portfolio_manager.positions.entry_cache import get_entry, remove_entry
+            from portfolio_manager.positions.position_store import insert_closed_position_002
 
-            if db_pos:
-                entry = float(db_pos["entry_price"])
-                pnl   = round((fill_price - entry) / entry * 100, 2) if fill_price else None
-                close_position(db_pos["id"], fill_price, exit_reason)
+            cached = get_entry(symbol)
+
+            if cached and cached.get("algo_id") == "002":
+                ep      = float(cached["entry_price"])
+                pnl     = round((fill_price - ep) / ep * 100, 2) if fill_price else None
+                insert_closed_position_002(
+                    symbol      = symbol,
+                    entry_price = ep,
+                    exit_price  = fill_price,
+                    shares      = cached["shares"],
+                    notional    = cached["notional"],
+                    exit_reason = exit_reason,
+                    order_id    = cached.get("order_id"),
+                    entry_date  = cached.get("entry_date"),
+                )
+                remove_entry(symbol)
                 pnl_str = f"{pnl:+.2f}%" if pnl is not None else "N/A"
                 msg = (
                     f"{emoji} *{label} triggered*\n\n"
-                    f"`{symbol}`  ${entry:.2f} → ${fill_price:.2f}  *{pnl_str}*"
+                    f"`{symbol}`  ${ep:.2f} → ${fill_price:.2f}  *{pnl_str}*"
                 )
             else:
+                # Cache miss (e.g. after bot restart) — try to reconstruct from Alpaca
                 fill_str = f"${fill_price:.2f}" if fill_price else "N/A"
-                msg = (
-                    f"{emoji} *{label} triggered*\n\n"
-                    f"`{symbol}`  fill={fill_str}\n"
-                    f"_\\(position not tracked in DB\\)_"
-                )
+                entry_reconstructed = None
+                try:
+                    from portfolio_manager.client import get_trading_client
+                    from alpaca.trading.requests import GetOrdersRequest
+                    from alpaca.trading.enums import QueryOrderStatus
+                    client = get_trading_client()
+                    orders = client.get_orders(GetOrdersRequest(
+                        status=QueryOrderStatus.CLOSED, symbols=[symbol], limit=20,
+                    ))
+                    buy_fills = sorted(
+                        [o for o in orders
+                         if str(o.side).lower() in ("buy", "orderside.buy")
+                         and o.filled_at and o.filled_avg_price],
+                        key=lambda o: o.filled_at, reverse=True,
+                    )
+                    if buy_fills:
+                        b = buy_fills[0]
+                        entry_reconstructed = {
+                            "entry_price": float(b.filled_avg_price),
+                            "shares":      float(b.filled_qty),
+                            "notional":    float(b.filled_avg_price) * float(b.filled_qty),
+                            "order_id":    str(b.id),
+                            "entry_date":  b.filled_at.date().isoformat(),
+                        }
+                except Exception:
+                    pass
+
+                if entry_reconstructed and fill_price:
+                    ep  = entry_reconstructed["entry_price"]
+                    pnl = round((fill_price - ep) / ep * 100, 2)
+                    insert_closed_position_002(
+                        symbol      = symbol,
+                        entry_price = ep,
+                        exit_price  = fill_price,
+                        shares      = entry_reconstructed["shares"],
+                        notional    = entry_reconstructed["notional"],
+                        exit_reason = exit_reason,
+                        order_id    = entry_reconstructed["order_id"],
+                        entry_date  = entry_reconstructed["entry_date"],
+                    )
+                    pnl_str = f"{pnl:+.2f}%"
+                    msg = (
+                        f"{emoji} *{label} triggered*\n\n"
+                        f"`{symbol}`  ${ep:.2f} → {fill_str}  *{pnl_str}*"
+                    )
+                else:
+                    msg = (
+                        f"{emoji} *{label} triggered*\n\n"
+                        f"`{symbol}`  fill={fill_str}"
+                    )
 
             logger.info(
                 "trade_stream: %s %s fill=%.2f reason=%s",

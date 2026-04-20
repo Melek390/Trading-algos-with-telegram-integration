@@ -473,8 +473,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             from portfolio_manager.reports.reporter import get_report_chart
             from telegram import InputFile
             png_bytes = get_report_chart(algo_id, period)
-            await query.message.reply_photo(
-                photo=InputFile(io.BytesIO(png_bytes), filename=f"algo_{algo_id}_{period}_chart.png"),
+            await query.message.reply_document(
+                document=InputFile(io.BytesIO(png_bytes), filename=f"algo_{algo_id}_{period}_chart.png"),
                 caption=f"📊 ALGO_00{algo_id} — {period_label} P&L Chart",
             )
         except Exception as e:
