@@ -95,14 +95,21 @@ def is_running(bot_data: dict, algo_id: str) -> bool:
 
 def status_footer(bot_data: dict) -> str:
     """
-    Return status lines for all active schedulers to append to every bot message.
-    Empty string when no scheduler is active.
+    Return status lines for all active schedulers + ALGO_003 SMA bot to append to every bot message.
+    Empty string when nothing is active.
     """
     lines = []
     for algo_id, info in ALGOS.items():
         if info.get("schedulable") and is_running(bot_data, algo_id):
             safe = info["name"].replace("_", "\\_")
             lines.append(f"🟢  {safe} auto-refresh: ON")
+
+    # ALGO_003 uses its own runner (not the scheduler), check separately
+    from services.algo003_runner import is_running as _sma_running
+    tasks = bot_data.get("algo003_tasks", {})
+    if any(_sma_running(bot_data, cid) for cid in tasks):
+        lines.append("🟢  ALGO\\_003 — SMA Crossover: Running")
+
     if not lines:
         return ""
     return "\n\n" + "\n".join(lines)
