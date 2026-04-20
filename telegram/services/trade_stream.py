@@ -124,7 +124,18 @@ def start_trade_stream(app) -> None:
             )
             cache_sym = (symbol[:-3] + "/USD") if _is_crypto_sym else symbol
 
-            if otype == "market" and symbol not in _ALGO_001_SYMBOLS:
+            # Determine if this symbol belongs to ALGO_003 via DB universe table
+            try:
+                from portfolio_manager.positions.position_store import get_algo_universe
+                _algo003_universe = get_algo_universe("003")
+            except Exception:
+                _algo003_universe = set()
+            _is_algo003 = (
+                cache_sym in _algo003_universe
+                or (_is_crypto_sym and cache_sym not in _algo003_universe and not _algo003_universe)
+            )
+
+            if otype == "market" and symbol not in _ALGO_001_SYMBOLS and _is_algo003:
                 try:
                     from portfolio_manager.trader.algo003_trader import get_open_pos, close_pos
                     db_003 = get_open_pos(cache_sym)
@@ -151,8 +162,8 @@ def start_trade_stream(app) -> None:
                 except Exception as e:
                     logger.warning("trade_stream: ALGO_003 market exit error for %s: %s", symbol, e)
 
-                # Crypto with no cache entry: nothing to do (orphaned position)
-                if _is_crypto_sym:
+                # ALGO_003 symbol with no cache entry: nothing to do (orphaned)
+                if _is_algo003:
                     return
 
             # ── ALGO_002 bracket TP / SL ─────────────────────────────────────────

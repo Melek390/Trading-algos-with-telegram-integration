@@ -126,13 +126,17 @@ def restore_from_alpaca() -> int:
         restored  = 0
 
 
+        # Load ALGO_003 universe from DB (written by algo003_runner on start)
+        # Canonical format: "BTC/USD", "ETH/USD", "AAPL", etc.
+        from portfolio_manager.positions.position_store import get_algo_universe
+        algo003_universe = get_algo_universe("003")
+
         for pos in positions:
             sym = pos.symbol
             if sym in _ALGO_001_SYMBOLS:
                 continue
 
-            # Determine canonical cache key and algo.
-            # ALGO_003 only ever trades crypto; all stock positions are ALGO_002.
+            # Convert Alpaca symbol to canonical cache key (BTCUSD → BTC/USD)
             is_crypto = any(
                 sym.startswith(b) and sym.endswith("USD")
                 for b in _CRYPTO_BASES
@@ -142,7 +146,13 @@ def restore_from_alpaca() -> int:
             if cache_sym in _cache:
                 continue
 
-            algo = "003" if is_crypto else "002"
+            # Classify: check DB universe first; fall back to crypto heuristic
+            if cache_sym in algo003_universe:
+                algo = "003"
+            elif is_crypto:
+                algo = "003"   # crypto not yet in DB (ALGO_003 not started yet)
+            else:
+                algo = "002"
 
             # Fallback entry data from Alpaca position
             entry_price = float(pos.avg_entry_price)

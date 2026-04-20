@@ -39,6 +39,15 @@ def start_sma_bot(app, chat_id: int) -> bool:
     if _BOT_DATA_KEY not in app.bot_data:
         app.bot_data[_BOT_DATA_KEY] = {}
 
+    # Persist ALGO_003 symbol universe to DB so restore_from_alpaca can classify correctly
+    try:
+        from portfolio_manager.trader.algo003_config import load_config
+        from portfolio_manager.positions.position_store import save_algo_universe
+        cfg = load_config(chat_id)
+        save_algo_universe("003", cfg.get("symbols", []))
+    except Exception as e:
+        logger.warning("algo003: could not save symbol universe: %s", e)
+
     main_task    = asyncio.create_task(_sma_loop(app, chat_id))
     monitor_task = asyncio.create_task(_threshold_loop(app, chat_id))
 

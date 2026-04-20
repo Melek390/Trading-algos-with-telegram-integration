@@ -330,6 +330,56 @@ def is_open(symbol: str, db_path: Path = _DEFAULT_DB) -> bool:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# algo_symbol_map — canonical symbol → algo ownership
+# ═════════════════════════════════════════════════════════════════════════════
+
+_CREATE_SQL_SYMBOL_MAP = """
+CREATE TABLE IF NOT EXISTS algo_symbol_map (
+    symbol   TEXT PRIMARY KEY,
+    algo_id  TEXT NOT NULL
+);
+"""
+
+
+def _init_symbol_map(db_path: Path = _DEFAULT_DB) -> None:
+    with _conn(db_path) as conn:
+        conn.execute(_CREATE_SQL_SYMBOL_MAP)
+
+
+def save_algo_universe(algo_id: str, symbols: list[str], db_path: Path = _DEFAULT_DB) -> None:
+    """
+    Upsert every symbol in `symbols` as belonging to `algo_id`.
+    Called whenever an algo runner starts / config is reloaded.
+    """
+    _init_symbol_map(db_path)
+    with _conn(db_path) as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO algo_symbol_map (symbol, algo_id) VALUES (?, ?)",
+            [(s, algo_id) for s in symbols],
+        )
+
+
+def get_algo_id_for_symbol(symbol: str, db_path: Path = _DEFAULT_DB) -> str | None:
+    """Return the algo_id for a known symbol, or None if not in the map."""
+    _init_symbol_map(db_path)
+    with _conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT algo_id FROM algo_symbol_map WHERE symbol = ?", (symbol,)
+        ).fetchone()
+    return row["algo_id"] if row else None
+
+
+def get_algo_universe(algo_id: str, db_path: Path = _DEFAULT_DB) -> set[str]:
+    """Return all symbols registered for a given algo."""
+    _init_symbol_map(db_path)
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT symbol FROM algo_symbol_map WHERE algo_id = ?", (algo_id,)
+        ).fetchall()
+    return {r["symbol"] for r in rows}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ALGO_003 — SMA Crossover (write-on-close helper)
 # ═════════════════════════════════════════════════════════════════════════════
 
