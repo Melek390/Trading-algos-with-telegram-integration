@@ -375,15 +375,34 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
             button_rows = []
 
             if algo_id == "002" and _ask_for_size:
-                # Pipeline result already in msg — send it, then ask for position size
+                # Build watchlist "+" buttons from near_misses so user can still add them
+                nm_pending = app.bot_data["algo002_pending_notional"].get("near_misses", [])
+                nm_rows    = []
+                if nm_pending:
+                    app.bot_data["algo002_near_misses"] = {
+                        sym: {
+                            "conditions_met":   n_cond,
+                            "eps_beat_pct":     row.get("eps_beat_pct"),
+                            "revenue_beat_pct": row.get("revenue_beat_pct"),
+                        }
+                        for sym, _, n_cond, row in nm_pending[:6]
+                    }
+                    for i in range(0, min(len(nm_pending), 6), 3):
+                        chunk = nm_pending[i:i+3]
+                        nm_rows.append([
+                            InlineKeyboardButton(f"+ {sym}", callback_data=f"algo002_add_{sym}")
+                            for sym, *_ in chunk
+                        ])
+
+                # Send signal result with near-miss watchlist buttons
+                signal_kb_rows = nm_rows + [[InlineKeyboardButton("« Back to Menu", callback_data="back_main")]]
                 await app.bot.send_message(
                     chat_id=chat_id,
                     text=msg,
                     parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("« Back to Menu", callback_data="back_main")
-                    ]]),
+                    reply_markup=InlineKeyboardMarkup(signal_kb_rows),
                 )
+
                 syms_str = "  ".join(f"`{sym}`" for sym, *_ in _qualified_ask[:3])
                 extra    = f"\n_…and {len(_qualified_ask) - 3} more_" if len(_qualified_ask) > 3 else ""
                 ask_msg  = (
