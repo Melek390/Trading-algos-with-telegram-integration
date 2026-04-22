@@ -20,7 +20,7 @@ _PROJECT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT))
 
 from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
+from alpaca.trading.requests import LimitOrderRequest, StopLossRequest, TakeProfitRequest
 
 from algos.algo002 import _load_latest, get_signal
 from portfolio_manager.capital_manager import get_algo_capital
@@ -54,16 +54,33 @@ class MultiTradeResult:
     error:       str        = ""
 
 
-def _get_last_price(sym: str) -> float | None:
-    """Fetch the latest trade price for a symbol from Alpaca (no yfinance)."""
+_MAX_SPREAD_PCT = 0.005   # reject entry if bid-ask spread > 0.5%
+
+
+def _get_quote(sym: str) -> tuple[float | None, float | None]:
+    """
+    Return (bid, ask) for sym from Alpaca latest quote.
+    Falls back to (last_trade, last_trade) if quote unavailable.
+    """
+    try:
+        from alpaca.data.requests import StockLatestQuoteRequest
+        quotes = get_client().get_stock_latest_quote(StockLatestQuoteRequest(symbol_or_symbols=[sym]))
+        q = quotes[sym]
+        bid = float(q.bid_price) if q.bid_price else None
+        ask = float(q.ask_price) if q.ask_price else None
+        if bid and ask:
+            return bid, ask
+    except Exception:
+        pass
+    # fallback: use last trade for both
     try:
         from alpaca.data.requests import StockLatestTradeRequest
         trades = get_client().get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=[sym]))
-        price = trades[sym].price
-        return float(price) if price else None
+        p = float(trades[sym].price)
+        return p, p
     except Exception as e:
-        logger.warning("algo002: could not fetch Alpaca price for %s: %s", sym, e)
-        return None
+        logger.warning("algo002: could not fetch quote for %s: %s", sym, e)
+        return None, None
 
 
 def preview_entries(db_path: Path = _DEFAULT_DB) -> tuple:
@@ -190,29 +207,38 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
             # Stop after the first successful entry (max 1 entry per cycle — bug #12).
             for idx, (sym, score, n_cond, row) in enumerate(all_qualified):
                 try:
-                    # Fetch live price to calculate qty and bracket prices
-                    last_price = _get_last_price(sym)
-                    if not last_price:
-                        raise ValueError(f"Could not fetch price for {sym}")
+                    # Fetch live bid/ask; reject if spread is too wide (slippage guard)
+                    bid, ask = _get_quote(sym)
+                    if not ask:
+                        raise ValueError(f"Could not fetch quote for {sym}")
+                    if bid and ask > 0:
+                        spread_pct = (ask - bid) / ask
+                        if spread_pct > _MAX_SPREAD_PCT:
+                            logger.info(
+                                "algo002: skipping %s — spread %.2f%% > %.1f%% limit",
+                                sym, spread_pct * 100, _MAX_SPREAD_PCT * 100,
+                            )
+                            continue
 
-                    qty      = math.floor(per_position / last_price)  # whole shares only
+                    # Size and bracket prices anchored to the ask (our actual fill price)
+                    qty      = math.floor(per_position / ask)
                     if qty < 1:
                         raise ValueError(
-                            f"Insufficient capital: ${per_position:.0f} < ${last_price:.2f}/share"
+                            f"Insufficient capital: ${per_position:.0f} < ${ask:.2f}/share"
                         )
-                    tp_price = round(last_price * (1 + _TAKE_PROFIT_PCT), 2)
-                    sl_price = round(last_price * (1 - _STOP_LOSS_PCT),   2)
-                    # Alpaca requires takeprofit.limitprice >= baseprice + 0.01
-                    # Rounding can violate this for cheap/penny stocks
-                    if tp_price < last_price + 0.01:
-                        tp_price = round(last_price + 0.01, 2)
+                    tp_price = round(ask * (1 + _TAKE_PROFIT_PCT), 2)
+                    sl_price = round(ask * (1 - _STOP_LOSS_PCT),   2)
+                    # Alpaca requires takeprofit.limitprice >= limit_price + 0.01
+                    if tp_price < ask + 0.01:
+                        tp_price = round(ask + 0.01, 2)
 
                     order = client.submit_order(
-                        MarketOrderRequest(
+                        LimitOrderRequest(
                             symbol        = sym,
                             qty           = qty,
                             side          = OrderSide.BUY,
-                            time_in_force = TimeInForce.GTC,  # stays pending until next open if submitted after hours
+                            limit_price   = ask,
+                            time_in_force = TimeInForce.DAY,
                             order_class   = OrderClass.BRACKET,
                             take_profit   = TakeProfitRequest(limit_price=tp_price),
                             stop_loss     = StopLossRequest(stop_price=sl_price),
@@ -223,7 +249,7 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
                         symbol      = sym,
                         algo_id     = "002",
                         direction   = "long",
-                        entry_price = last_price,
+                        entry_price = ask,
                         shares      = qty,
                         notional    = per_position,
                         order_id    = str(order.id),
@@ -232,15 +258,15 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
                         "symbol":      sym,
                         "notional":    per_position,
                         "qty":         qty,
-                        "entry_price": last_price,
+                        "entry_price": ask,
                         "tp_price":    tp_price,
                         "sl_price":    sl_price,
                         "order_id":    str(order.id),
                         "score":       score,
                     })
                     logger.info(
-                        "algo002: BUY %s  qty=%d  $%.0f  TP=$%.2f  SL=$%.2f  order=%s",
-                        sym, qty, per_position, tp_price, sl_price, order.id,
+                        "algo002: BUY %s  qty=%d  $%.0f  ask=%.2f  TP=$%.2f  SL=$%.2f  order=%s",
+                        sym, qty, per_position, ask, tp_price, sl_price, order.id,
                     )
                     result.qualified = all_qualified[idx + 1:]  # remaining → watchlist
                     break  # 1 successful entry per cycle — done
