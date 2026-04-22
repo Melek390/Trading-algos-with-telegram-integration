@@ -349,14 +349,17 @@ def get_report_csv(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> by
         for r in _alpaca_open_001():
             writer.writerow([r["symbol"], r["entry_price"], r["current_price"], r["pnl_pct"], r["market_value"], r["qty"]])
     else:
-        open_   = _fetch_open(table, db_path) if table else []
+        from portfolio_manager.positions.entry_cache import get_algo_open_positions
+        open_   = get_algo_open_positions(algo_id)
         ap_map  = _alpaca_positions_map()
         writer.writerow(["symbol", "entry_date", "entry_price", "current_price", "pnl_pct", "days_held", "notional", "order_id"])
         for r in open_:
             sym       = r.get("symbol", "")
             ed        = r.get("entry_date", "")
             days_held = (date.today() - date.fromisoformat(ed)).days if ed else ""
-            ap        = ap_map.get(sym)
+            # Crypto: cache uses BTC/USD, Alpaca uses BTCUSD
+            ap_sym = sym.replace("/", "")
+            ap     = ap_map.get(ap_sym) or ap_map.get(sym)
             if ap:
                 entry   = float(ap.avg_entry_price)
                 current = float(ap.current_price)
@@ -470,13 +473,49 @@ def get_report(algo_id: str, period: str, db_path: Path = _DEFAULT_DB) -> str:
 
 def _fetch_closed_since(table: str, start: str, db_path: Path, algo_id: str = "001") -> list[dict]:
     """
-    Fetch closed position P&L for the chart directly from Alpaca order history.
-    Logic:
-      - Pull all CLOSED orders since `start` for the relevant symbol universe
-      - Pair each filled SELL with the most recent preceding filled BUY for that symbol
-      - PnL = (sell_fill_price - buy_fill_price) * qty
+    Fetch closed position P&L for the chart.
+
+    ALGO_002 / ALGO_003: reads directly from their DB tables (correctly scoped per algo).
+    ALGO_001: reconstructs from Alpaca order history (not auto-traded, no DB records).
+
     Returns [{exit_date: str, pnl_value: float}, ...] sorted by exit_date ASC.
     """
+    # ── ALGO_002 / ALGO_003: read from DB (already scoped per algo) ───────────
+    if algo_id in ("002", "003"):
+        if not db_path.exists():
+            return []
+        try:
+            with _conn(db_path) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT exit_date,
+                           entry_price, exit_price, shares,
+                           {'pnl' if algo_id == '003' else 'NULL as pnl'}
+                    FROM {table}
+                    WHERE status = 'closed'
+                      AND exit_date >= ?
+                    ORDER BY exit_date ASC
+                    """,
+                    (start,),
+                ).fetchall()
+        except Exception:
+            return []
+
+        results = []
+        for r in rows:
+            xdate = r[0]
+            if algo_id == "003" and r[4] is not None:
+                pnl = float(r[4])
+            else:
+                ep, xp, sh = r[1], r[2], r[3]
+                if ep is not None and xp is not None and sh:
+                    pnl = round((float(xp) - float(ep)) * float(sh), 2)
+                else:
+                    continue
+            results.append({"exit_date": xdate, "pnl_value": pnl})
+        return results
+
+    # ── ALGO_001: reconstruct from Alpaca (not written to DB) ─────────────────
     try:
         from alpaca.trading.requests import GetOrdersRequest
         from alpaca.trading.enums import QueryOrderStatus
@@ -489,14 +528,8 @@ def _fetch_closed_since(table: str, start: str, db_path: Path, algo_id: str = "0
         all_orders = client.get_orders(
             GetOrdersRequest(status=QueryOrderStatus.CLOSED, after=start_dt, limit=500)
         )
+        orders = [o for o in all_orders if o.symbol in _ALGO_001_SYMBOLS]
 
-        # Filter by algo universe
-        if algo_id == "001":
-            orders = [o for o in all_orders if o.symbol in _ALGO_001_SYMBOLS]
-        else:
-            orders = [o for o in all_orders if o.symbol not in _ALGO_001_SYMBOLS]
-
-        # Separate filled buys and sells, sorted by fill time
         buys = sorted(
             [o for o in orders
              if str(o.side).lower() in ("buy", "orderside.buy")
@@ -517,7 +550,6 @@ def _fetch_closed_since(table: str, start: str, db_path: Path, algo_id: str = "0
             sell_price = float(sell.filled_avg_price)
             qty        = float(sell.filled_qty)
 
-            # Find the most recent BUY for this symbol filled before this SELL
             matching_buy = None
             for buy in reversed(buys):
                 if buy.symbol == sym and buy.filled_at < sell_time:
