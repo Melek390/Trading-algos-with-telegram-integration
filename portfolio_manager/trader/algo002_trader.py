@@ -238,7 +238,7 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
                             qty           = qty,
                             side          = OrderSide.BUY,
                             limit_price   = ask,
-                            time_in_force = TimeInForce.DAY,
+                            time_in_force = TimeInForce.GTC,
                             order_class   = OrderClass.BRACKET,
                             take_profit   = TakeProfitRequest(limit_price=tp_price),
                             stop_loss     = StopLossRequest(stop_price=sl_price),
