@@ -20,7 +20,7 @@ _PROJECT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT))
 
 from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
-from alpaca.trading.requests import LimitOrderRequest, StopLossRequest, TakeProfitRequest
+from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
 
 from algos.algo002 import _load_latest, get_signal
 from portfolio_manager.capital_manager import get_algo_capital
@@ -233,11 +233,10 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
                         tp_price = round(ask + 0.01, 2)
 
                     order = client.submit_order(
-                        LimitOrderRequest(
+                        MarketOrderRequest(
                             symbol        = sym,
                             qty           = qty,
                             side          = OrderSide.BUY,
-                            limit_price   = ask,
                             time_in_force = TimeInForce.GTC,
                             order_class   = OrderClass.BRACKET,
                             take_profit   = TakeProfitRequest(limit_price=tp_price),
