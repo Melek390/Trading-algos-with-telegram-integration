@@ -316,6 +316,40 @@ async def handle_algo003_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     text    = (update.message.text or "").strip()
 
+    # ── ALGO_001 position size reply ──────────────────────────────────────────
+    pending_001 = context.bot_data.get("algo001_pending_notional")
+    if pending_001 and chat_id == pending_001.get("chat_id"):
+        try:
+            notional = float(text.replace("$", "").replace(",", ""))
+            if notional <= 0:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text(
+                "⚠️ Enter a valid dollar amount \\(e\\.g\\. `50000`\\), or tap *Skip* to pass\\.",
+                parse_mode="MarkdownV2",
+            )
+            return
+
+        context.bot_data.pop("algo001_pending_notional", None)
+        await update.message.reply_text(
+            f"⏳ Executing ALGO\\_001 with `${notional:,.0f}`\\.\\.\\.",
+            parse_mode="MarkdownV2",
+        )
+        try:
+            from services.trade import execute_trade, format_trade_result
+            result = await execute_trade("001", per_position_notional=notional)
+            msg    = format_trade_result(result, "001")
+        except Exception as e:
+            msg = f"❌ Trade execution failed:\n`{e}`"
+
+        await update.message.reply_text(
+            msg, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Back to Menu", callback_data="back_main")
+            ]]),
+        )
+        return
+
     # ── ALGO_002 position size reply ──────────────────────────────────────────
     pending = context.bot_data.get("algo002_pending_notional")
     if pending and chat_id == pending.get("chat_id"):

@@ -243,6 +243,22 @@ def get_signal(top_n: int = 5, db_path: Path = _DB_PATH) -> Signal002:
     near_misses.sort(key=lambda x: (x[2], x[1]), reverse=True)
     top_near_misses = near_misses[:3]
 
+    # ── Hard macro gate: IWM 20d return must be positive ─────────────────────
+    # When mid/small caps are in a downtrend, Revenue Beat setups fail at a much
+    # higher rate regardless of individual stock quality.
+    if iwm_ret is not None and iwm_ret <= 0:
+        return Signal002(
+            candidates    = qualified[:top_n],
+            near_misses   = top_near_misses,
+            gate_passed   = False,
+            gate_reason   = f"IWM 20d return = {iwm_ret:.2f}% ≤ 0 — mid/small-cap downtrend, no new entries",
+            n_qualified   = len(qualified),
+            n_total       = len(rows),
+            snapshot_date = snapshot_date,
+            vix           = vix,
+            iwm_ret       = iwm_ret,
+        )
+
     return Signal002(
         candidates    = qualified[:top_n],
         near_misses   = top_near_misses,

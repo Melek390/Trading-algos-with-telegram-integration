@@ -183,6 +183,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data == "algo003_ask_daily":
         await handle_algo003_ask_daily(update, context)
 
+    elif data == "algo001_skip_entry":
+        context.bot_data.pop("algo001_pending_notional", None)
+        await query.edit_message_text(
+            "⏭ *ALGO\\_001 entry skipped* for this cycle.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Back to Menu", callback_data="back_main")
+            ]]),
+        )
+
     elif data == "algo002_skip_entry":
         context.bot_data.pop("algo002_pending_notional", None)
         await query.edit_message_text(

@@ -18,7 +18,7 @@ def _execute_sync(algo_id: str, per_position_notional: float | None = None):
     """Synchronous dispatch to the correct trader."""
     if algo_id == "001":
         from portfolio_manager.trader.algo001_trader import execute
-        return execute()
+        return execute(notional=per_position_notional)
     elif algo_id == "002":
         from portfolio_manager.trader.algo002_trader import execute
         return execute(per_position_notional=per_position_notional)

@@ -56,7 +56,29 @@ class TradeResult:
     signal_reason: str = ""
 
 
-def execute() -> TradeResult:
+def preview_001() -> tuple[str, str, str | None, str]:
+    """
+    Check what ALGO_001 would do without executing.
+    Returns (action, target, current_held, signal_reason).
+    action: 'HOLD' | 'BUY' | 'REBALANCE' | 'ERROR'
+    """
+    try:
+        signal = get_signal()
+    except Exception as e:
+        return "ERROR", "", None, str(e)
+    target = signal.position
+    try:
+        client    = get_trading_client()
+        positions = {p.symbol: p for p in client.get_all_positions()}
+    except Exception as e:
+        return "ERROR", target, None, signal.reason
+    current = next((sym for sym in _ALGO001_SYMBOLS if sym in positions), None)
+    if current == target:
+        return "HOLD", target, current, signal.reason
+    return ("REBALANCE" if current else "BUY"), target, current, signal.reason
+
+
+def execute(notional: float | None = None) -> TradeResult:
     """
     Run the full ALGO_001 trade cycle.
     Returns a TradeResult describing what happened.
@@ -74,15 +96,18 @@ def execute() -> TradeResult:
     target = signal.position   # 'SPY', 'VXUS', or 'SHY'
 
     # ── 2. Get allocated capital ───────────────────────────────────────────────
-    try:
-        allocation = get_algo_capital("001")
-    except Exception as e:
-        return TradeResult(
-            action  = "ERROR",
-            target  = target,
-            message = f"Capital manager error: {e}",
-            signal_reason = signal.reason,
-        )
+    if notional is not None:
+        allocation = float(notional)
+    else:
+        try:
+            allocation = get_algo_capital("001")
+        except Exception as e:
+            return TradeResult(
+                action  = "ERROR",
+                target  = target,
+                message = f"Capital manager error: {e}",
+                signal_reason = signal.reason,
+            )
 
     # ── 3. Fetch current positions ─────────────────────────────────────────────
     try:

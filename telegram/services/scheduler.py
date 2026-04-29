@@ -315,11 +315,42 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
                     msg += "_Signal unavailable._\n\n"
 
             # ── Step 3: Execute trade (any tradeable algo) ──────────────────────
-            _trade_result  = None
-            _ask_for_size  = False
-            _qualified_ask = []
+            _trade_result    = None
+            _ask_for_size    = False   # ALGO_002
+            _ask_for_size_001 = False  # ALGO_001
+            _qualified_ask   = []
             if success and info.get("tradeable"):
-                if algo_id == "002":
+                if algo_id == "001":
+                    # Preview first — only ask for size when a trade is actually needed
+                    try:
+                        from portfolio_manager.trader.algo001_trader import preview_001
+                        _loop  = asyncio.get_event_loop()
+                        action, target, current, sig_reason = await _loop.run_in_executor(
+                            None, preview_001,
+                        )
+                        if action in ("BUY", "REBALANCE"):
+                            _ask_for_size_001 = True
+                            sold_label = f"`{current}` → " if current else ""
+                            app.bot_data["algo001_pending_notional"] = {
+                                "chat_id": chat_id,
+                                "target":  target,
+                                "current": current,
+                            }
+                            msg += (
+                                f"🎯 Signal: {sold_label}`{target}`\n"
+                            )
+                        else:
+                            # HOLD or ERROR — execute immediately, nothing to size
+                            from services.trade import execute_trade, format_trade_result
+                            _trade_result = await execute_trade(algo_id)
+                            msg += format_trade_result(_trade_result, algo_id)
+                    except Exception:
+                        logger.warning("algo001 preview failed — auto-executing", exc_info=True)
+                        from services.trade import execute_trade, format_trade_result
+                        _trade_result = await execute_trade(algo_id)
+                        msg += format_trade_result(_trade_result, algo_id)
+
+                elif algo_id == "002":
                     # Preview qualified stocks first — ask user for position size
                     try:
                         from portfolio_manager.trader.algo002_trader import preview_entries
@@ -353,18 +384,12 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
                         from services.trade import execute_trade, format_trade_result
                         _trade_result = await execute_trade(algo_id)
                         msg += format_trade_result(_trade_result, algo_id)
-                        if algo_id == "001":
-                            logger.info(
-                                "ALGO_001 auto-trade: action=%s target=%s",
-                                _trade_result.action, _trade_result.target,
-                            )
-                        else:
-                            logger.info(
-                                "ALGO_%s auto-trade: %d entries  %d exits",
-                                algo_id,
-                                len(getattr(_trade_result, "entries", [])),
-                                len(getattr(_trade_result, "exits", [])),
-                            )
+                        logger.info(
+                            "ALGO_%s auto-trade: %d entries  %d exits",
+                            algo_id,
+                            len(getattr(_trade_result, "entries", [])),
+                            len(getattr(_trade_result, "exits", [])),
+                        )
                     except Exception:
                         logger.warning(
                             "execute_trade('%s') failed after auto-refresh", algo_id, exc_info=True,
@@ -373,6 +398,34 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
 
             # ── Build keyboard (+ watchlist buttons for ALGO_002 near-misses) ──
             button_rows = []
+
+            if algo_id == "001" and _ask_for_size_001:
+                pending = app.bot_data["algo001_pending_notional"]
+                sold_label = f"`{pending['current']}` → " if pending.get("current") else ""
+                await app.bot.send_message(
+                    chat_id=chat_id,
+                    text=msg,
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("« Back to Menu", callback_data="back_main")
+                    ]]),
+                )
+                ask_msg = (
+                    f"🎯 *ALGO\\_001 — Entry Signal*\n\n"
+                    f"*Signal:* {sold_label}`{pending['target']}`\n\n"
+                    f"💬 *Reply with position size in $*\n"
+                    f"_e\\.g\\._  `50000`\n\n"
+                    f"_Tap Skip to pass this cycle\\._"
+                )
+                await app.bot.send_message(
+                    chat_id=chat_id,
+                    text=ask_msg,
+                    parse_mode="MarkdownV2",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("⏭ Skip this cycle", callback_data="algo001_skip_entry")
+                    ]]),
+                )
+                continue  # wait for user reply — MessageHandler will execute the trade
 
             if algo_id == "002" and _ask_for_size:
                 # Build watchlist "+" buttons from near_misses so user can still add them
@@ -403,12 +456,14 @@ async def _scheduler_loop(app, chat_id: int, algo_id: str) -> None:
                     reply_markup=InlineKeyboardMarkup(signal_kb_rows),
                 )
 
-                syms_str = "  ".join(f"`{sym}`" for sym, *_ in _qualified_ask[:3])
-                extra    = f"\n_…and {len(_qualified_ask) - 3} more_" if len(_qualified_ask) > 3 else ""
+                top_sym  = _qualified_ask[0][0]
+                n_others = len(_qualified_ask) - 1
+                others_str = f"  _(+{n_others} more qualified)_" if n_others > 0 else ""
                 ask_msg  = (
                     f"🎯 *ALGO\\_002 — Entry Signal*\n\n"
-                    f"*Qualified:* {syms_str}{extra}\n\n"
-                    f"💬 *Reply with position size per trade in $*\n"
+                    f"*Entering:* `{top_sym}`{others_str}\n"
+                    f"_One trade this cycle — top ranked candidate_\n\n"
+                    f"💬 *Reply with position size in $*\n"
                     f"_e.g._ `500`\n\n"
                     f"_Tap Skip to pass this cycle._"
                 )
