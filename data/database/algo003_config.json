@@ -2,13 +2,19 @@
   "8436224599": {
     "symbols": [
       "BTC/USD",
-      "AAPL",
-      "GLD",
-      "ETH/USD"
+      "SOL/USD",
+      "ETH/USD",
+      "XRP/USD"
     ],
-    "timeframe": "M15",
+    "timeframe": "H1",
     "sma_length": 200,
-    "profit_threshold": 100.0,
-    "daily_pnl_target": 20000.0
+    "profit_threshold": 50.0,
+    "daily_pnl_target": 200.0,
+    "lot_sizes": {
+      "BTC/USD": 1500.0,
+      "SOL/USD": 1500.0,
+      "ETH/USD": 1500.0,
+      "XRP/USD": 1500.0
+    }
   }
 }
