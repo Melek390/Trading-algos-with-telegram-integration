@@ -39,8 +39,8 @@ from portfolio_manager.positions.entry_cache import (
 logger = logging.getLogger(__name__)
 
 _MAX_POSITIONS  = 5
-_TAKE_PROFIT_PCT = 0.08   # +4%
-_STOP_LOSS_PCT   = 0.04   # -2%
+_TAKE_PROFIT_PCT = 0.08   # +8%
+_STOP_LOSS_PCT   = 0.04   # -4%
 
 
 @dataclass
