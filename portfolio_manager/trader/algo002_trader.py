@@ -2,8 +2,8 @@
 algo002_trader.py — Revenue Beat Explosion trader.
 
 Cycle (runs once per scheduled refresh):
-  1. Monitoring cycle — detect positions closed by Alpaca bracket (TP +2% / SL -1%)
-     or force-close positions held >= 6 weeks (time_exit).
+  1. Monitoring cycle — detect positions closed by Alpaca bracket (TP +8% / SL −4%)
+     or force-close positions held >= 3 weeks / 21 days (time_exit).
   2. Evaluate new entries — top candidates from the latest signal that
      pass 5/6 conditions, aren't already open, up to 5 total positions.
   3. Return a MultiTradeResult with exits, entries, and currently held.
@@ -22,7 +22,7 @@ sys.path.insert(0, str(_PROJECT))
 from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
 from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
 
-from algos.algo002 import _load_latest, get_signal
+from algos.algo002 import get_signal
 from portfolio_manager.capital_manager import get_algo_capital
 from portfolio_manager.client import get_trading_client, get_client
 from portfolio_manager.positions.position_monitor import (
@@ -135,8 +135,8 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
 
     # ── 1. Get signal + latest snapshot rows ──────────────────────────────────
     try:
-        signal        = get_signal(top_n=_MAX_POSITIONS, db_path=db_path)
-        snapshot_rows = _load_latest(db_path)
+        signal = get_signal(top_n=_MAX_POSITIONS, db_path=db_path)
+
     except (FileNotFoundError, RuntimeError) as e:
         result.error = f"Could not read signal: {e}\nRun Refresh Data first."
         return result
@@ -205,7 +205,7 @@ def execute(per_position_notional: float | None = None, db_path: Path = _DEFAULT
 
             # Try each qualified candidate in score order; skip Alpaca-unavailable assets.
             # Stop after the first successful entry (max 1 entry per cycle — bug #12).
-            for idx, (sym, score, n_cond, row) in enumerate(all_qualified):
+            for idx, (sym, score, *_) in enumerate(all_qualified):
                 try:
                     # Fetch live bid/ask; reject if spread is too wide (slippage guard)
                     bid, ask = _get_quote(sym)

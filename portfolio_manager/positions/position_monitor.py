@@ -4,13 +4,13 @@ portfolio_manager/positions/position_monitor.py
 Business logic for ALGO_002 position monitoring.
 
 Exit triggers (checked in order):
-  1. take_profit  — Alpaca bracket closed position, price >= entry * 1.02
-  2. stop_loss    — Alpaca bracket closed position, price <= entry * 0.99
-  3. time_exit    — position held >= 3 weeks (21 days), force-closed via Alpaca
+  1. take_profit  — Alpaca bracket limit order filled → labelled 'take_profit'
+  2. stop_loss    — Alpaca bracket stop order filled  → labelled 'stop_loss'
+  3. time_exit    — position held >= 3 weeks (21 days), force-closed via market order
 
-Bracket orders (TP +2% / SL -1%) are submitted at entry time.
-The monitoring cycle detects when Alpaca has already closed a position
-and records the correct exit reason in the DB.
+Bracket prices (TP +8% / SL −4%) are anchored to the live ask at entry time
+and set in algo002_trader.py. The monitoring cycle detects when Alpaca has
+already closed a position via its bracket and records the correct exit reason in the DB.
 """
 
 import logging
@@ -30,9 +30,7 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-_TAKE_PROFIT_PCT = 0.02   # +2%
-_STOP_LOSS_PCT   = 0.01   # -1%
-_MAX_HOLD_DAYS   = 21     # 3 weeks
+_MAX_HOLD_DAYS = 21   # force-close after 3 weeks if bracket hasn't fired
 
 
 # ── Condition checker (used by algo002_trader.py for entry filtering) ──────────
@@ -159,9 +157,9 @@ def run_monitoring_cycle(
        - otherwise                         → hold, no action
 
     B) Gone from Alpaca (bracket order triggered automatically):
-       - price >= entry * 1.20  → take_profit
-       - price <= entry * 0.90  → stop_loss
-       - price unknown          → bracket_exit (generic label)
+       - order type == limit  → take_profit
+       - order type == stop   → stop_loss
+       - order type unknown   → bracket_exit (generic label)
 
     Parameters
     ----------
